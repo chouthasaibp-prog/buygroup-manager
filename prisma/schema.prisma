@@ -158,6 +158,12 @@ model Order {
   paidOut                            Boolean        @default(false)
   creditCardPaid                     Boolean        @default(false)
   profitReceived                     Boolean        @default(false)
+  memberSubmittedTrackingToAdmin     Boolean        @default(false)
+  adminSubmittedTrackingToWarehouse  Boolean        @default(false)
+  memberMarkedDelivered              Boolean        @default(false)
+  adminMarkedScannedByWarehouse      Boolean        @default(false)
+  adminReceivedPayoutFromWarehouse   Boolean        @default(false)
+  adminPaidMember                    Boolean        @default(false)
   currentStage                       OrderStage     @default(ORDERED)
   notes                              String?
   manualCreditCardDueDate            DateTime?
@@ -170,6 +176,12 @@ model Order {
   paidOutAt                          DateTime?
   creditCardPaidAt                   DateTime?
   profitReceivedAt                   DateTime?
+  memberSubmittedTrackingToAdminAt   DateTime?
+  adminSubmittedTrackingToWarehouseAt DateTime?
+  memberMarkedDeliveredAt            DateTime?
+  adminMarkedScannedByWarehouseAt    DateTime?
+  adminReceivedPayoutFromWarehouseAt DateTime?
+  adminPaidMemberAt                  DateTime?
   updatedAt                          DateTime       @updatedAt
   userId                             String?
   workspaceId                        String?

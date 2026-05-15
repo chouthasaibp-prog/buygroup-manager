@@ -52,14 +52,31 @@ export function calculateFinancials(order: Pick<Order, "retailPrice" | "quantity
   return { totalPaid, totalPayout, chaseCashback, youngAdultCashback, totalCashback, amountOwed, profit };
 }
 
-export function deriveStage(order: Pick<Order, "trackingNumber" | "trackingSubmitted" | "delivered" | "scanned" | "paidOut" | "creditCardPaid" | "profitReceived">): OrderStage {
-  if (order.profitReceived) return "PROFIT_RECEIVED";
+type StageFields = Pick<Order,
+  "trackingNumber" |
+  "trackingSubmitted" |
+  "delivered" |
+  "scanned" |
+  "paidOut" |
+  "creditCardPaid" |
+  "profitReceived" |
+  "memberPaid" |
+  "memberSubmittedTrackingToAdmin" |
+  "adminSubmittedTrackingToWarehouse" |
+  "memberMarkedDelivered" |
+  "adminMarkedScannedByWarehouse" |
+  "adminReceivedPayoutFromWarehouse" |
+  "adminPaidMember"
+>;
+
+export function deriveStage(order: StageFields): OrderStage {
+  if (order.adminPaidMember || order.memberPaid || order.profitReceived) return "PROFIT_RECEIVED";
   if (order.creditCardPaid) return "CREDIT_PAID";
-  if (order.paidOut) return "PAID_OUT";
-  if (order.scanned) return "SCANNED";
-  if (order.delivered) return "DELIVERED";
-  if (order.trackingSubmitted) return "TRACKING_SUBMITTED";
-  if (order.trackingNumber?.trim()) return "TRACKING_READY";
+  if (order.adminReceivedPayoutFromWarehouse || order.paidOut) return "PAID_OUT";
+  if (order.adminMarkedScannedByWarehouse || order.scanned) return "SCANNED";
+  if (order.memberMarkedDelivered || order.delivered) return "DELIVERED";
+  if (order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) return "TRACKING_SUBMITTED";
+  if (order.memberSubmittedTrackingToAdmin || order.trackingNumber?.trim()) return "TRACKING_READY";
   return "ORDERED";
 }
 
@@ -127,21 +144,21 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date()): 
       });
     }
 
-    if (!order.trackingSubmitted) {
+    if (!(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)) {
       const dueDate = order.trackingNumber ? order.trackingAddedAt ?? now : addDays(order.createdAt, 1);
       reminders.push({
         id: `${order.id}:tracking`,
         type: "submit_tracking",
-        label: order.trackingNumber ? "Submit tracking" : "Tracking missing",
+        label: order.trackingNumber ? "Submit tracking to warehouse" : "Tracking missing",
         dueDate,
         order,
         severity: severityFor(dueDate),
-        action: order.trackingNumber ? "Mark submitted" : "Add tracking"
+        action: order.trackingNumber ? "Submit to warehouse" : "Add tracking"
       });
     }
 
-    if (order.delivered && order.scanned && !order.paidOut) {
-      const baseDueDate = addDays(order.deliveredAt ?? order.updatedAt, 2);
+    if ((order.memberMarkedDelivered || order.delivered) && (order.adminMarkedScannedByWarehouse || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut)) {
+      const baseDueDate = addDays(order.memberMarkedDeliveredAt ?? order.deliveredAt ?? order.updatedAt, 2);
       const dueDate = order.payoutReminderSnoozedAt && order.payoutReminderSnoozedAt > baseDueDate ? order.payoutReminderSnoozedAt : baseDueDate;
       reminders.push({
         id: `${order.id}:payout`,
@@ -154,18 +171,18 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date()): 
       });
     }
 
-    if (order.paidOut && !order.creditCardPaid) {
+    if ((order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid)) {
       const dueDate =
         order.manualCreditCardDueDate ??
-        addDays(order.paidOutAt ?? order.updatedAt, order.amazonAccount?.defaultCreditCardDueDays ?? 7);
+        addDays(order.adminReceivedPayoutFromWarehouseAt ?? order.paidOutAt ?? order.updatedAt, order.amazonAccount?.defaultCreditCardDueDays ?? 7);
       reminders.push({
         id: `${order.id}:card`,
         type: "pay_credit_card",
-        label: "Pay credit card",
+        label: "Pay member",
         dueDate,
         order,
         severity: severityFor(dueDate),
-        action: "Mark card paid"
+        action: "Mark paid to member"
       });
     }
 

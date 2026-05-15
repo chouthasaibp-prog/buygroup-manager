@@ -33,7 +33,6 @@ export default async function Home({ searchParams }: Props) {
       : Promise.resolve([])
   ]);
 
-  const reminders = buildReminders(orders);
   const visibleOrders = context.isAdmin ? orders : orders.map((order) => ({
     ...order,
     trackingSubmitted: false,
@@ -47,23 +46,35 @@ export default async function Home({ searchParams }: Props) {
     profitReceived: order.memberPaid,
     profitReceivedAt: order.memberPaidAt,
     payoutReminderSnoozedAt: null,
+    manualCreditCardDueDate: null,
     internalAdminNotes: null,
     adminSubmittedTrackingToBuyGroup: false,
     adminSubmittedTrackingToBuyGroupAt: null,
-    warehouseScanned: false,
+    adminSubmittedTrackingToWarehouse: false,
+    adminSubmittedTrackingToWarehouseAt: null,
+    warehouseScanned: order.adminMarkedScannedByWarehouse || order.warehouseScanned,
     warehouseScannedAt: null,
+    adminMarkedScannedByWarehouse: order.adminMarkedScannedByWarehouse || order.warehouseScanned,
+    adminMarkedScannedByWarehouseAt: null,
     buyGroupPaidAdmin: false,
     buyGroupPaidAdminAt: null,
+    adminReceivedPayoutFromWarehouse: false,
+    adminReceivedPayoutFromWarehouseAt: null,
+    adminPaidMember: order.adminPaidMember || order.memberPaid,
+      adminPaidMemberAt: order.adminPaidMember || order.memberPaid ? order.adminPaidMemberAt ?? order.memberPaidAt : null,
     adminProfit: null,
     adminMargin: null,
     currentStage: (order.memberPaid
       ? "PROFIT_RECEIVED"
-      : order.delivered
-        ? "DELIVERED"
-        : order.trackingNumber
-          ? "TRACKING_READY"
-          : "ORDERED") as OrderStage
+      : order.adminMarkedScannedByWarehouse || order.warehouseScanned
+        ? "SCANNED"
+        : order.memberMarkedDelivered || order.delivered
+          ? "DELIVERED"
+          : order.trackingNumber
+            ? "TRACKING_READY"
+            : "ORDERED") as OrderStage
   }));
+  const reminders = buildReminders(visibleOrders);
   const openOrders = visibleOrders.filter((order) => !order.profitReceived);
   const totals = visibleOrders.reduce(
     (acc, order) => {
