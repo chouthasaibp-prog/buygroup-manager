@@ -111,6 +111,37 @@ async function createTrackingChangeAlert({
   });
 }
 
+async function createDeliveryBeforeTrackingAlert({
+  workspaceId,
+  orderId,
+  memberProfileId,
+  deliveredAt
+}: {
+  workspaceId: string;
+  orderId: string;
+  memberProfileId: string | null;
+  deliveredAt: Date;
+}) {
+  const existing = await prisma.deliveryBeforeTrackingAlert.findFirst({
+    where: {
+      workspaceId,
+      orderId,
+      reviewedAt: null
+    },
+    select: { id: true }
+  });
+  if (existing) return;
+
+  await prisma.deliveryBeforeTrackingAlert.create({
+    data: {
+      workspaceId,
+      orderId,
+      memberProfileId,
+      deliveredAt
+    }
+  });
+}
+
 export async function createOrder(formData: FormData) {
   const context = await requireWorkspaceActionContext(formData);
   const isPersonal = context.activeWorkspace.type === "PERSONAL";
@@ -194,7 +225,7 @@ export async function updateOrder(formData: FormData) {
   const amazonAccountId = await requireWorkspaceAmazonAccountId(workspaceId, optionalString(formData, "amazonAccountId"));
   const memberPayoutAmount = numberFromForm(formData, "memberPayoutAmount", existing.memberPayoutAmount ?? calculateFinancials(existing).amountOwed);
 
-  await prisma.order.update({
+  const updated = await prisma.order.update({
     where: { id },
     data: {
       itemName: String(formData.get("itemName") ?? existing.itemName).trim() || existing.itemName,
@@ -281,6 +312,15 @@ export async function updateOrder(formData: FormData) {
       memberProfileId: context.profile.id,
       oldTrackingNumber: existing.trackingNumber,
       newTrackingNumber: trackingNumber
+    });
+  }
+
+  if (!isPersonal && !isOperatorAdmin && !existing.adminSubmittedTrackingToWarehouse && !existing.trackingSubmitted && memberMarkedDelivered && !existing.memberMarkedDelivered) {
+    await createDeliveryBeforeTrackingAlert({
+      workspaceId,
+      orderId: id,
+      memberProfileId: context.profile.id,
+      deliveredAt: updated.memberMarkedDeliveredAt ?? updated.deliveredAt ?? new Date()
     });
   }
 
@@ -514,8 +554,57 @@ export async function quickAction(formData: FormData) {
 
   if (Object.keys(data).length > 0) {
     await prisma.order.update({ where: { id }, data });
+    if (!isPersonal && action === "memberDelivered" && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)) {
+      await createDeliveryBeforeTrackingAlert({
+        workspaceId,
+        orderId: id,
+        memberProfileId: context.profile.id,
+        deliveredAt: now
+      });
+    }
     await deriveStagePatch(workspaceId, id);
   }
+
+  revalidatePath("/");
+}
+
+export async function reviewDeliveryBeforeTrackingAlert(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  if (context.activeWorkspace.type !== "OPERATOR" || !context.isAdmin) {
+    throw new Error("Only workspace admins can review delivery alerts.");
+  }
+
+  const id = String(formData.get("alertId") ?? "");
+  await prisma.deliveryBeforeTrackingAlert.updateMany({
+    where: {
+      id,
+      workspaceId: context.activeWorkspace.id,
+      reviewedAt: null
+    },
+    data: { reviewedAt: new Date() }
+  });
+
+  revalidatePath("/");
+}
+
+export async function snoozeDeliveryBeforeTrackingAlert(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  if (context.activeWorkspace.type !== "OPERATOR" || !context.isAdmin) {
+    throw new Error("Only workspace admins can snooze delivery alerts.");
+  }
+
+  const id = String(formData.get("alertId") ?? "");
+  const minutes = numberFromForm(formData, "minutes", 60);
+  const snoozedUntil = new Date();
+  snoozedUntil.setMinutes(snoozedUntil.getMinutes() + minutes);
+  await prisma.deliveryBeforeTrackingAlert.updateMany({
+    where: {
+      id,
+      workspaceId: context.activeWorkspace.id,
+      reviewedAt: null
+    },
+    data: { snoozedUntil }
+  });
 
   revalidatePath("/");
 }

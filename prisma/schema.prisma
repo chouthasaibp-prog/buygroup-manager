@@ -51,6 +51,7 @@ model Profile {
   submittedOrders        Order[]           @relation("OrderSubmittedBy")
   assignedOperatorOrders Order[]           @relation("OrderAssignedOperator")
   trackingChangeAlerts   TrackingChangeAlert[] @relation("TrackingChangeAlertMember")
+  deliveryBeforeTrackingAlerts DeliveryBeforeTrackingAlert[] @relation("DeliveryBeforeTrackingAlertMember")
 
   @@index([email])
 }
@@ -70,6 +71,7 @@ model Workspace {
   warehouses     Warehouse[]
   orders         Order[]
   trackingChangeAlerts TrackingChangeAlert[]
+  deliveryBeforeTrackingAlerts DeliveryBeforeTrackingAlert[]
 
   @@index([ownerProfileId])
   @@index([type])
@@ -214,6 +216,7 @@ model Order {
   buyGroup                           BuyGroup?      @relation(fields: [buyGroupId], references: [id], onDelete: SetNull)
   warehouse                          Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
   trackingChangeAlerts               TrackingChangeAlert[]
+  deliveryBeforeTrackingAlerts       DeliveryBeforeTrackingAlert[]
 
   @@index([userId])
   @@index([workspaceId])
@@ -226,6 +229,26 @@ model Order {
   @@index([amazonAccountId])
   @@index([buyGroupId])
   @@index([warehouseId])
+}
+
+model DeliveryBeforeTrackingAlert {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  orderId        String
+  memberProfileId String?
+  deliveredAt    DateTime
+  reviewedAt     DateTime?
+  snoozedUntil   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  member         Profile?  @relation("DeliveryBeforeTrackingAlertMember", fields: [memberProfileId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, reviewedAt, snoozedUntil])
+  @@index([workspaceId, createdAt])
+  @@index([orderId])
+  @@index([memberProfileId])
 }
 
 model TrackingChangeAlert {

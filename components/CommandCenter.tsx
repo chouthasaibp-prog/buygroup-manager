@@ -1,9 +1,9 @@
 "use client";
 
 import { useActionState, useMemo, useState } from "react";
-import type { AmazonAccount, BuyGroup, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
-import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
+import type { AmazonAccount, BuyGroup, DeliveryBeforeTrackingAlert, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
+import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
+import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, reviewDeliveryBeforeTrackingAlert, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
@@ -14,6 +14,7 @@ type Props = {
   warehouses: Warehouse[];
   reminders: Reminder[];
   trackingChangeAlerts: TrackingChangeAlertItem[];
+  deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[];
   totals: {
     openOrders: number;
     overdueReminders: number;
@@ -39,6 +40,11 @@ type Props = {
 };
 
 type TrackingChangeAlertItem = TrackingChangeAlert & {
+  order: OrderWithRelations;
+  member: Profile | null;
+};
+
+type DeliveryBeforeTrackingAlertItem = DeliveryBeforeTrackingAlert & {
   order: OrderWithRelations;
   member: Profile | null;
 };
@@ -232,6 +238,17 @@ function compactWorkflowDate(date: Date | string | null | undefined) {
   return dateTime(date);
 }
 
+function elapsedSince(date: Date | string) {
+  const ms = Math.max(0, Date.now() - new Date(date).getTime());
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+}
+
 function buildPersonalWorkflowSteps(order: OrderWithRelations): WorkflowDateStep[] {
   return [
     { label: "Ordered", completed: true, date: order.createdAt },
@@ -394,7 +411,7 @@ function stageToneKey(stage: StageFilter): OrderStage {
   return stage;
 }
 
-export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, trackingChangeAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
+export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
@@ -508,7 +525,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
         </header>
 
         <div className="px-4 py-5 md:px-7">
-          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} viewMode={viewMode} />}
+          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} viewMode={viewMode} />}
           {section === "orders" && (
             <OrdersView
               orders={filteredOrders}
@@ -575,11 +592,12 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   );
 }
 
-function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, totals, setSection, setStage, setSelectedOrder, activeWorkspace, viewMode }: {
+function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, totals, setSection, setStage, setSelectedOrder, activeWorkspace, viewMode }: {
   orders: OrderWithRelations[];
   buyGroups: BuyGroup[];
   reminders: Reminder[];
   trackingChangeAlerts: TrackingChangeAlertItem[];
+  deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[];
   totals: Props["totals"];
   setSection: (value: string) => void;
   setStage: (value: StageFilter) => void;
@@ -663,18 +681,31 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, totals,
           </div>
         </div>
       </section>
-      <InboxPanel reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} buyGroups={buyGroups} setSelectedOrder={setSelectedOrder} />
+      <InboxPanel reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} buyGroups={buyGroups} setSelectedOrder={setSelectedOrder} />
     </div>
   );
 }
 
-function InboxPanel({ reminders, trackingChangeAlerts, buyGroups, setSelectedOrder }: { reminders: Reminder[]; trackingChangeAlerts: TrackingChangeAlertItem[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void }) {
+function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, buyGroups, setSelectedOrder }: { reminders: Reminder[]; trackingChangeAlerts: TrackingChangeAlertItem[]; deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void }) {
   return (
     <section className="rounded-lg border border-slate-500/30 bg-panel/80 p-4 shadow-glow">
       <div className="mb-4 flex items-center gap-2">
         <Inbox size={18} className="text-blue-300" />
         <h2 className="font-semibold">Inbox / Needs Attention</h2>
       </div>
+      {deliveryBeforeTrackingAlerts.length > 0 && (
+        <div className="mb-5">
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.15em] text-red-200">
+            <AlertTriangle size={14} />
+            High Priority
+          </div>
+          <div className="space-y-2">
+            {deliveryBeforeTrackingAlerts.slice(0, 8).map((alert) => (
+              <DeliveryBeforeTrackingAlertCard key={alert.id} alert={alert} setSelectedOrder={setSelectedOrder} />
+            ))}
+          </div>
+        </div>
+      )}
       {trackingChangeAlerts.length > 0 && (
         <div className="mb-5">
           <div className="mb-2 text-xs font-semibold uppercase tracking-[.15em] text-muted">Tracking Changes</div>
@@ -739,6 +770,55 @@ function TrackingChangeAlertCard({ alert, setSelectedOrder }: { alert: TrackingC
           <input type="hidden" name="workspaceId" value={alert.workspaceId} />
           <input type="hidden" name="alertId" value={alert.id} />
           <button className="rounded-md border border-blue-300/40 px-2.5 py-1.5 text-xs text-blue-100 hover:bg-blue-400/10">Warehouse tracking updated</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function DeliveryBeforeTrackingAlertCard({ alert, setSelectedOrder }: { alert: DeliveryBeforeTrackingAlertItem; setSelectedOrder: (order: OrderWithRelations) => void }) {
+  const memberLabel = alert.member ? [alert.member.firstName, alert.member.lastName].filter(Boolean).join(" ").trim() || alert.member.name || alert.member.email : memberName(alert.order);
+  const destination = alert.order.buyGroup?.name ?? alert.order.warehouse?.name ?? alert.order.warehouse?.code ?? "Missing destination";
+  return (
+    <div className="rounded-lg border border-red-400/70 bg-red-500/15 p-3 shadow-[0_0_24px_rgba(248,113,113,.16)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="mb-2 inline-flex items-center gap-1.5 rounded-md border border-red-300/50 bg-red-500/25 px-2 py-1 text-[11px] font-semibold uppercase tracking-[.12em] text-red-100">
+            <AlertTriangle size={13} />
+            High Priority
+          </div>
+          <div className="text-sm font-semibold text-red-50">URGENT: Member marked delivered before tracking was submitted to warehouse.</div>
+          <div className="mt-1 text-xs text-red-100/80">{memberLabel} · {alert.order.itemName}</div>
+          <div className="mt-2 grid gap-1 text-xs text-red-50 sm:grid-cols-2">
+            <div className="rounded-md border border-red-200/20 bg-black/20 px-2 py-1">Tracking: <span className="text-white">{alert.order.trackingNumber || "Missing"}</span></div>
+            <div className="rounded-md border border-red-200/20 bg-black/20 px-2 py-1">Delivered: <span className="text-white">{dateTime(alert.deliveredAt)}</span></div>
+            <div className="rounded-md border border-red-200/20 bg-black/20 px-2 py-1">Destination: <span className="text-white">{destination}</span></div>
+            <div className="rounded-md border border-red-200/20 bg-black/20 px-2 py-1">Elapsed: <span className="text-white">{elapsedSince(alert.deliveredAt)}</span></div>
+          </div>
+        </div>
+        <button onClick={() => setSelectedOrder(alert.order)} className="rounded-md border border-red-200/30 p-1.5 text-red-100 hover:bg-red-400/10 hover:text-white" title="Open order">
+          <ChevronRight size={15} />
+        </button>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {alert.order.trackingNumber && (
+          <form action={quickAction}>
+            <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+            <input type="hidden" name="id" value={alert.orderId} />
+            <input type="hidden" name="action" value="submitToWarehouse" />
+            <button className="rounded-md border border-red-200/40 bg-red-500/20 px-2.5 py-1.5 text-xs font-medium text-red-50 hover:bg-red-500/30">Submit tracking to warehouse</button>
+          </form>
+        )}
+        <form action={reviewDeliveryBeforeTrackingAlert}>
+          <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+          <input type="hidden" name="alertId" value={alert.id} />
+          <button className="rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium hover:bg-white/20">Mark reviewed</button>
+        </form>
+        <form action={snoozeDeliveryBeforeTrackingAlert}>
+          <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+          <input type="hidden" name="alertId" value={alert.id} />
+          <input type="hidden" name="minutes" value="60" />
+          <button className="rounded-md border border-red-200/30 px-2.5 py-1.5 text-xs text-red-100 hover:bg-red-400/10">Snooze</button>
         </form>
       </div>
     </div>
