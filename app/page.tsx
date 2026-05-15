@@ -73,8 +73,8 @@ export default async function Home({ searchParams }: Props) {
     paidOutAt: null,
     creditCardPaid: false,
     creditCardPaidAt: null,
-    profitReceived: order.memberPaid,
-    profitReceivedAt: order.memberPaidAt,
+    profitReceived: order.memberMarkedDone || order.profitReceived,
+    profitReceivedAt: order.memberMarkedDoneAt ?? order.profitReceivedAt,
     payoutReminderSnoozedAt: null,
     manualCreditCardDueDate: null,
     internalAdminNotes: null,
@@ -94,7 +94,7 @@ export default async function Home({ searchParams }: Props) {
     adminPaidMemberAt: order.adminPaidMember || order.memberPaid ? order.adminPaidMemberAt ?? order.memberPaidAt : null,
     adminProfit: null,
     adminMargin: null,
-    currentStage: (order.memberPaid
+    currentStage: (order.memberMarkedDone || order.profitReceived
       ? "PROFIT_RECEIVED"
       : order.adminMarkedScannedByWarehouse || order.warehouseScanned
         ? "SCANNED"

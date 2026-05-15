@@ -194,6 +194,10 @@ model Order {
   assignedOperatorProfileId          String?
   memberPaid                         Boolean        @default(false)
   memberPaidAt                       DateTime?
+  memberConfirmedPayment             Boolean        @default(false)
+  memberConfirmedPaymentAt           DateTime?
+  memberMarkedDone                   Boolean        @default(false)
+  memberMarkedDoneAt                 DateTime?
   memberPayoutAmount                 Float?
   memberVisibleNotes                 String?
   internalAdminNotes                 String?
@@ -225,6 +229,8 @@ model Order {
   @@index([assignedOperatorProfileId])
   @@index([workspaceId, submittedByProfileId])
   @@index([workspaceId, memberPaid])
+  @@index([workspaceId, memberConfirmedPayment])
+  @@index([workspaceId, memberMarkedDone])
   @@index([currentStage])
   @@index([amazonAccountId])
   @@index([buyGroupId])

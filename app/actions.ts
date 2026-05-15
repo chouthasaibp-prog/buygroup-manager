@@ -217,7 +217,7 @@ export async function updateOrder(formData: FormData) {
   const scanned = isPersonal ? personalScanned : adminMarkedScannedByWarehouse;
   const paidOut = isPersonal ? personalPaidOut : adminReceivedPayoutFromWarehouse;
   const creditCardPaid = isPersonal ? personalCreditCardPaid : adminPaidMember;
-  const profitReceived = isPersonal ? personalProfitReceived : adminPaidMember;
+  const profitReceived = isPersonal ? personalProfitReceived : existing.profitReceived;
   const chaseValue = String(formData.get("chaseCashbackPercent") ?? existing.chaseCashbackPercent);
   const chaseCashbackPercent = chaseValue === "custom" ? numberFromForm(formData, "customChaseCashbackPercent") : Number(chaseValue);
   const buyGroupId = await requireWorkspaceBuyGroupId(workspaceId, optionalString(formData, "buyGroupId"));
@@ -250,7 +250,6 @@ export async function updateOrder(formData: FormData) {
         scanned,
         paidOut,
         creditCardPaid,
-        profitReceived,
         adminSubmittedTrackingToBuyGroup: trackingSubmitted,
         adminSubmittedTrackingToWarehouse,
         warehouseScanned: scanned,
@@ -299,8 +298,7 @@ export async function updateOrder(formData: FormData) {
         buyGroupPaidAdminAt: paidOut && !existing.buyGroupPaidAdmin ? new Date() : existing.buyGroupPaidAdminAt,
         adminReceivedPayoutFromWarehouseAt: adminReceivedPayoutFromWarehouse && !existing.adminReceivedPayoutFromWarehouse ? new Date() : existing.adminReceivedPayoutFromWarehouseAt,
         adminPaidMemberAt: adminPaidMember && !existing.adminPaidMember ? new Date() : existing.adminPaidMemberAt,
-        creditCardPaidAt: creditCardPaid && !existing.creditCardPaid ? new Date() : existing.creditCardPaidAt,
-        profitReceivedAt: profitReceived && !existing.profitReceived ? new Date() : existing.profitReceivedAt
+        creditCardPaidAt: creditCardPaid && !existing.creditCardPaid ? new Date() : existing.creditCardPaidAt
       } : {})
     }
   });
@@ -448,7 +446,7 @@ export async function quickAction(formData: FormData) {
 
   const adminOnly = ["submitTracking", "submitToWarehouse", "confirmTrackingReceived", "scanned", "warehouseScanned", "warehousePaid", "paidOut", "cardPaid", "profitReceived", "snoozePayout", "memberPaid"];
   const personalActions = ["submitTracking", "submitToWarehouse", "memberDelivered", "scanned", "warehouseScanned", "warehousePaid", "paidOut", "cardPaid", "profitReceived"];
-  const memberOnly = ["memberDelivered"];
+  const memberOnly = ["memberDelivered", "memberConfirmPayment", "memberDone"];
   if (isPersonal && !personalActions.includes(action)) {
     throw new Error("You do not have permission for this action.");
   }
@@ -540,9 +538,19 @@ export async function quickAction(formData: FormData) {
     data.adminPaidMemberAt = now;
     data.creditCardPaid = true;
     data.creditCardPaidAt = now;
+    data.memberPayoutAmount = order.memberPayoutAmount ?? calculateFinancials(order).amountOwed;
+  }
+
+  if (!isPersonal && action === "memberConfirmPayment" && (order.adminPaidMember || order.memberPaid)) {
+    data.memberConfirmedPayment = true;
+    data.memberConfirmedPaymentAt = now;
+  }
+
+  if (!isPersonal && action === "memberDone" && order.memberConfirmedPayment) {
+    data.memberMarkedDone = true;
+    data.memberMarkedDoneAt = now;
     data.profitReceived = true;
     data.profitReceivedAt = now;
-    data.memberPayoutAmount = order.memberPayoutAmount ?? calculateFinancials(order).amountOwed;
   }
 
   if (!isPersonal && action === "snoozePayout") {

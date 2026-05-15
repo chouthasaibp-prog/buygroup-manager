@@ -2,7 +2,7 @@
 
 import { useActionState, useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, DeliveryBeforeTrackingAlert, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
-import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
+import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
 import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, reviewDeliveryBeforeTrackingAlert, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
@@ -78,7 +78,7 @@ type WorkspaceMemberItem = {
   email: string;
 };
 
-type StageFilter = OrderStage | "ALL" | "ADMIN_PAID_TO_MEMBER" | "ADMIN_DONE" | "MEMBER_TRACKING_SENT" | "MEMBER_PAID" | "MEMBER_DONE";
+type StageFilter = OrderStage | "ALL" | "ADMIN_PAID_TO_MEMBER" | "ADMIN_DONE" | "MEMBER_TRACKING_SENT" | "MEMBER_AWAITING_PAYMENT" | "MEMBER_PAYMENT_SENT" | "MEMBER_PAYMENT_CONFIRMED" | "MEMBER_PAID" | "MEMBER_DONE";
 type WorkflowViewMode = "personal" | "member" | "admin";
 type WorkflowDateStep = {
   label: string;
@@ -115,14 +115,16 @@ const memberStages: Array<{ key: StageFilter; label: string; short: string }> = 
   { key: "MEMBER_TRACKING_SENT", label: "Tracking Sent to Admin", short: "Tracking Sent to Admin" },
   { key: "DELIVERED", label: "Delivered", short: "Delivered" },
   { key: "SCANNED", label: "Scanned", short: "Scanned" },
-  { key: "MEMBER_PAID", label: "Paid", short: "Paid" },
+  { key: "MEMBER_AWAITING_PAYMENT", label: "Awaiting Payment", short: "Awaiting Payment" },
+  { key: "MEMBER_PAYMENT_SENT", label: "Payment Sent", short: "Payment Sent" },
+  { key: "MEMBER_PAYMENT_CONFIRMED", label: "Payment Confirmed", short: "Payment Confirmed" },
   { key: "MEMBER_DONE", label: "Done", short: "Done" }
 ];
 
 const nav = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "Orders", icon: Package },
-  { key: "accounts", label: "Accounts", icon: CreditCard },
+  { key: "accounts", label: "Credit / Accounts", icon: CreditCard },
   { key: "buyGroups", label: "Buy Groups", icon: Landmark },
   { key: "analytics", label: "Analytics", icon: Bell },
   { key: "importExport", label: "Import / Export", icon: Upload },
@@ -159,7 +161,9 @@ const actionLabels: Record<string, string> = {
   warehousePaid: "Mark Paid Out from Warehouse",
   cardPaid: "Mark Card Paid",
   profitReceived: "Mark Done",
-  memberPaid: "Mark Paid to Member"
+  memberPaid: "Mark Paid to Member",
+  memberConfirmPayment: "Confirm Payment Received",
+  memberDone: "Mark Done"
 };
 
 function cls(...values: Array<string | false | null | undefined>) {
@@ -206,7 +210,10 @@ function memberName(order: OrderWithRelations) {
 }
 
 function memberWorkflowLabel(order: OrderWithRelations) {
-  if (order.adminPaidMember || order.memberPaid || order.profitReceived) return "Paid";
+  if (order.memberMarkedDone || order.profitReceived) return "Done";
+  if (order.memberConfirmedPayment) return "Payment Confirmed";
+  if (order.adminPaidMember || order.memberPaid) return "Payment Sent";
+  if (order.adminReceivedPayoutFromWarehouse || order.paidOut || order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) return "Awaiting Payment";
   if (order.adminReceivedPayoutFromWarehouse || order.paidOut) return "Waiting For Payout";
   if (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) return "Scanned";
   if (order.memberMarkedDelivered || order.delivered) return "Delivered";
@@ -309,14 +316,24 @@ function buildMemberWorkflowSteps(order: OrderWithRelations): WorkflowDateStep[]
       date: firstDate(order.adminMarkedScannedByWarehouseAt, order.warehouseScannedAt, order.scannedAt)
     },
     {
-      label: "Paid",
-      completed: order.adminPaidMember || order.memberPaid || order.profitReceived,
-      date: firstDate(order.adminPaidMemberAt, order.memberPaidAt, order.profitReceivedAt)
+      label: "Awaiting Payment",
+      completed: order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned,
+      date: firstDate(order.adminMarkedScannedByWarehouseAt, order.warehouseScannedAt, order.scannedAt)
+    },
+    {
+      label: "Payment Sent",
+      completed: order.adminPaidMember || order.memberPaid,
+      date: firstDate(order.adminPaidMemberAt, order.memberPaidAt)
+    },
+    {
+      label: "Payment Confirmed",
+      completed: order.memberConfirmedPayment,
+      date: order.memberConfirmedPaymentAt
     },
     {
       label: "Done",
-      completed: order.adminPaidMember || order.memberPaid || order.profitReceived,
-      date: firstDate(order.adminPaidMemberAt, order.memberPaidAt, order.profitReceivedAt)
+      completed: order.memberMarkedDone || order.profitReceived,
+      date: firstDate(order.memberMarkedDoneAt, order.profitReceivedAt)
     }
   ];
 }
@@ -431,11 +448,13 @@ function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewM
 function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilter) {
   if (selectedStage === "ALL") return true;
   if (selectedStage === "ORDERED") return !(order.memberSubmittedTrackingToAdmin || order.trackingNumber);
-  if (selectedStage === "MEMBER_TRACKING_SENT") return !!order.trackingNumber && !(order.memberMarkedDelivered || order.delivered) && !(order.adminPaidMember || order.memberPaid || order.profitReceived);
-  if (selectedStage === "DELIVERED") return (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminPaidMember || order.memberPaid || order.profitReceived);
-  if (selectedStage === "SCANNED") return (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminPaidMember || order.memberPaid || order.profitReceived);
-  if (selectedStage === "MEMBER_PAID") return order.adminPaidMember || order.memberPaid || order.profitReceived;
-  if (selectedStage === "MEMBER_DONE") return order.adminPaidMember || order.memberPaid || order.profitReceived;
+  if (selectedStage === "MEMBER_TRACKING_SENT") return !!order.trackingNumber && !(order.memberMarkedDelivered || order.delivered) && !(order.memberMarkedDone || order.profitReceived);
+  if (selectedStage === "DELIVERED") return (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.memberMarkedDone || order.profitReceived);
+  if (selectedStage === "SCANNED") return (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminPaidMember || order.memberPaid) && !(order.memberMarkedDone || order.profitReceived);
+  if (selectedStage === "MEMBER_AWAITING_PAYMENT") return (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminPaidMember || order.memberPaid);
+  if (selectedStage === "MEMBER_PAYMENT_SENT" || selectedStage === "MEMBER_PAID") return (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment;
+  if (selectedStage === "MEMBER_PAYMENT_CONFIRMED") return order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived);
+  if (selectedStage === "MEMBER_DONE") return order.memberMarkedDone || order.profitReceived;
   return order.currentStage === selectedStage;
 }
 
@@ -466,7 +485,8 @@ function matchesAdminStage(order: OrderWithRelations, selectedStage: StageFilter
 
 function stageToneKey(stage: StageFilter): OrderStage {
   if (stage === "MEMBER_TRACKING_SENT") return "TRACKING_READY";
-  if (stage === "MEMBER_PAID" || stage === "MEMBER_DONE" || stage === "ADMIN_PAID_TO_MEMBER" || stage === "ADMIN_DONE") return "PROFIT_RECEIVED";
+  if (stage === "MEMBER_AWAITING_PAYMENT") return "SCANNED";
+  if (stage === "MEMBER_PAYMENT_SENT" || stage === "MEMBER_PAYMENT_CONFIRMED" || stage === "MEMBER_PAID" || stage === "MEMBER_DONE" || stage === "ADMIN_PAID_TO_MEMBER" || stage === "ADMIN_DONE") return "PROFIT_RECEIVED";
   if (stage === "ALL") return "ORDERED";
   return stage;
 }
@@ -483,7 +503,9 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   const [warehouseFilter, setWarehouseFilter] = useState("ALL");
   const [memberFilter, setMemberFilter] = useState("ALL");
   const [newOrderOpen, setNewOrderOpen] = useState(false);
+  const [inboxOpen, setInboxOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<OrderWithRelations | null>(null);
+  const inboxCount = reminders.length + trackingChangeAlerts.length + deliveryBeforeTrackingAlerts.length;
 
   const filteredOrders = useMemo(() => {
     const q = query.toLowerCase();
@@ -571,6 +593,13 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
             <h1 className="text-xl font-semibold text-white">What needs action?</h1>
           </div>
           <div className="flex items-center gap-2">
+            {section !== "dashboard" && (
+              <button onClick={() => setInboxOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-blue-300/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-100 hover:bg-blue-500/20" title="Open inbox">
+                <Inbox size={16} />
+                Inbox
+                {inboxCount > 0 && <span className="rounded-md bg-blue-400/20 px-1.5 py-0.5 text-[11px] text-blue-50">{inboxCount}</span>}
+              </button>
+            )}
             <form action={signOut}>
               <button className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white" title="Log out">
                 <LogOut size={16} />
@@ -614,7 +643,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
               setSelectedOrder={setSelectedOrder}
             />
           )}
-          {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} />}
+          {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
           {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} />}
           {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
           {section === "queues" && (
@@ -650,6 +679,25 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
       </section>
 
       {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} onClose={() => setNewOrderOpen(false)} />}
+      {inboxOpen && (
+        <div className="fixed inset-0 z-40 flex justify-end bg-black/45 backdrop-blur-sm" onClick={() => setInboxOpen(false)}>
+          <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-cyan/20 bg-surface p-4 shadow-neon" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Inbox size={18} className="text-blue-300" />
+                <h2 className="font-semibold">Inbox / Needs Attention</h2>
+              </div>
+              <button onClick={() => setInboxOpen(false)} className="rounded-lg border border-line p-2 text-muted hover:text-white" title="Close inbox">
+                <X size={16} />
+              </button>
+            </div>
+            <InboxPanel reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} buyGroups={buyGroups} setSelectedOrder={(order) => {
+              setSelectedOrder(order);
+              setInboxOpen(false);
+            }} framed={false} />
+          </aside>
+        </div>
+      )}
       {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} memberStatus={workspaceMembers.find((member) => member.profileId === selectedOrder.submittedByProfileId)?.status ?? null} isAdmin={isOperatorAdmin} viewMode={viewMode} onClose={() => setSelectedOrder(null)} />}
     </main>
   );
@@ -698,7 +746,8 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
     { label: "Ordered / Tracking Needed", value: orders.filter((order) => !order.trackingNumber).length.toString(), featured: false },
     { label: "Tracking Sent to Admin", value: orders.filter((order) => order.memberSubmittedTrackingToAdmin || order.trackingNumber).length.toString(), featured: false },
     { label: "Delivered", value: orders.filter((order) => order.memberMarkedDelivered || order.delivered).length.toString(), featured: false },
-    { label: "Paid", value: orders.filter((order) => order.adminPaidMember || order.memberPaid || order.profitReceived).length.toString(), featured: false }
+    { label: "Payment Sent", value: orders.filter((order) => (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment).length.toString(), featured: false },
+    { label: "Payment Confirmed", value: orders.filter((order) => order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived)).length.toString(), featured: false }
   ];
   const metrics = viewMode === "admin" ? adminMetrics : viewMode === "personal" ? personalMetrics : memberMetrics;
   const dashboardQueues = viewMode === "admin" ? adminStages.slice(1) : viewMode === "personal" ? personalStages.slice(1) : memberStages.slice(1);
@@ -749,13 +798,15 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
   );
 }
 
-function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, buyGroups, setSelectedOrder }: { reminders: Reminder[]; trackingChangeAlerts: TrackingChangeAlertItem[]; deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void }) {
+function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, buyGroups, setSelectedOrder, framed = true }: { reminders: Reminder[]; trackingChangeAlerts: TrackingChangeAlertItem[]; deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void; framed?: boolean }) {
   return (
-    <section className="rounded-lg border border-slate-500/30 bg-panel/80 p-4 shadow-glow">
-      <div className="mb-4 flex items-center gap-2">
-        <Inbox size={18} className="text-blue-300" />
-        <h2 className="font-semibold">Inbox / Needs Attention</h2>
-      </div>
+    <section className={framed ? "rounded-lg border border-slate-500/30 bg-panel/80 p-4 shadow-glow" : "space-y-0"}>
+      {framed && (
+        <div className="mb-4 flex items-center gap-2">
+          <Inbox size={18} className="text-blue-300" />
+          <h2 className="font-semibold">Inbox / Needs Attention</h2>
+        </div>
+      )}
       {deliveryBeforeTrackingAlerts.length > 0 && (
         <div className="mb-5">
           <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.15em] text-red-200">
@@ -1079,7 +1130,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Tracking", order.trackingNumber ?? "Missing"],
     ["Delivered", order.memberMarkedDelivered || order.delivered ? "Yes" : "No"],
     ["Scanned", order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned ? "Yes" : "No"],
-    ["Paid", order.adminPaidMember || order.memberPaid || order.profitReceived ? "Yes" : "No"]
+    ["Payment", order.memberConfirmedPayment ? "Confirmed" : order.adminPaidMember || order.memberPaid ? "Sent" : "Open"]
   ];
   const fieldsByStage: Record<OrderStage, Array<[string, string]>> = {
     ORDERED: [
@@ -1231,7 +1282,9 @@ function StageActions({ order, onOpen, isAdmin, viewMode }: { order: OrderWithRe
       (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) ? "warehouseScanned" :
       (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut) ? "warehousePaid" :
       (order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid) ? "memberPaid" : "")
-    : (order.trackingNumber && !(order.memberMarkedDelivered || order.delivered) ? "memberDelivered" : "");
+    : (order.trackingNumber && !(order.memberMarkedDelivered || order.delivered) ? "memberDelivered" :
+      (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment ? "memberConfirmPayment" :
+      order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived) ? "memberDone" : "");
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1340,6 +1393,8 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
     ["Scanned by warehouse", order.adminMarkedScannedByWarehouseAt ?? order.warehouseScannedAt ?? order.scannedAt],
     ...(isAdmin ? [["Paid out from warehouse", order.adminReceivedPayoutFromWarehouseAt ?? order.buyGroupPaidAdminAt ?? order.paidOutAt] as [string, Date | string | null | undefined]] : []),
     ["Paid to member", order.adminPaidMemberAt ?? order.memberPaidAt],
+    ["Member confirmed payment", order.memberConfirmedPaymentAt],
+    ["Member marked done", order.memberMarkedDoneAt],
     ["Last Updated", order.updatedAt]
   ];
 
@@ -1411,6 +1466,8 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
                 <Fact label="Warehouse scanned" value={yesNo(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned)} />
                 {isAdmin && <Fact label="Warehouse paid admin" value={yesNo(order.adminReceivedPayoutFromWarehouse || order.buyGroupPaidAdmin || order.paidOut)} />}
                 <Fact label="Paid to member" value={order.adminPaidMember || order.memberPaid ? "Yes" : "No"} />
+                <Fact label="Member confirmed payment" value={yesNo(order.memberConfirmedPayment)} />
+                <Fact label="Member marked done" value={yesNo(order.memberMarkedDone || order.profitReceived)} />
                 <Fact label="Member payout" value={money(order.memberPayoutAmount ?? financials.amountOwed)} />
               </>
             )}
@@ -1436,7 +1493,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
             ] : [
               ["Member payout", money(order.memberPayoutAmount ?? financials.amountOwed)],
-              ["Payment status", order.adminPaidMember || order.memberPaid ? "Paid" : "Open"]
+              ["Payment status", order.memberConfirmedPayment ? "Confirmed" : order.adminPaidMember || order.memberPaid ? "Payment sent" : "Open"]
             ]).map(([label, value]) => <Fact key={label} label={label} value={value} />)}
           </div>
           <div className="rounded-lg border border-line bg-surface/60 p-4">
@@ -1504,9 +1561,54 @@ function OrderFields({ accounts, buyGroups, order, lockTracking = false }: { acc
   );
 }
 
-function AccountsView({ accounts, orders, workspaceId }: { accounts: AmazonAccount[]; orders: OrderWithRelations[]; setSelectedOrder: (order: OrderWithRelations) => void; workspaceId: string }) {
+function creditStatus(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "personal") return order.creditCardPaid ? "Credit paid" : order.paidOut ? "Ready to pay card" : "Open";
+  if (order.memberMarkedDone || order.profitReceived) return "Done";
+  if (order.memberConfirmedPayment) return "Payment confirmed";
+  if (order.adminPaidMember || order.memberPaid) return "Payment sent";
+  if (order.adminReceivedPayoutFromWarehouse || order.paidOut) return "Ready to pay member";
+  return "Open";
+}
+
+function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations[]; viewMode: WorkflowViewMode }) {
+  const rows = orders
+    .filter((order) => viewMode === "personal" ? !order.creditCardPaid : !(order.memberMarkedDone || order.profitReceived))
+    .map((order) => ({ order, financials: calculateFinancials(order) }));
+  const totalOwed = rows.reduce((sum, item) => sum + item.financials.amountOwed, 0);
+
+  return (
+    <section className="rounded-lg border border-slate-400/30 bg-panel/80 p-4 shadow-glow">
+      <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-[.12em] text-muted">{viewMode === "personal" ? "Credit Owed" : "Credit / Amount Owed"}</div>
+          <div className="mt-1 text-3xl font-semibold text-white">{money(totalOwed)}</div>
+        </div>
+        <div className="text-sm text-muted">{rows.length} open {rows.length === 1 ? "order" : "orders"}</div>
+      </div>
+      <div className="space-y-2">
+        {rows.slice(0, 12).map(({ order, financials }) => (
+          <div key={order.id} className="grid gap-2 rounded-lg border border-line bg-surface/60 p-3 text-sm lg:grid-cols-[1.4fr_1fr_repeat(4,minmax(120px,.6fr))] lg:items-center">
+            <div className="min-w-0">
+              <div className="truncate font-medium text-white">{order.itemName}</div>
+              {viewMode === "admin" && <div className="mt-0.5 truncate text-xs text-muted">{memberName(order)}</div>}
+            </div>
+            <div className="text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
+            <Fact label="Total paid" value={money(financials.totalPaid)} />
+            <Fact label="Cashback" value={money(financials.totalCashback)} />
+            <Fact label="Credit / owed" value={money(financials.amountOwed)} />
+            <Fact label="Status" value={creditStatus(order, viewMode)} />
+          </div>
+        ))}
+        {rows.length === 0 && <div className="rounded-lg border border-dashed border-line p-5 text-center text-sm text-muted">No open credit owed.</div>}
+      </div>
+    </section>
+  );
+}
+
+function AccountsView({ accounts, orders, workspaceId, viewMode }: { accounts: AmazonAccount[]; orders: OrderWithRelations[]; setSelectedOrder: (order: OrderWithRelations) => void; workspaceId: string; viewMode: WorkflowViewMode }) {
   return (
     <div className="space-y-4">
+      <CreditSummarySection orders={orders} viewMode={viewMode} />
       <form action={createAmazonAccount} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
         <input type="hidden" name="workspaceId" value={workspaceId} />
         <div className="mb-3 flex items-center gap-2">
@@ -1697,6 +1799,12 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
                 <button className="rounded-md border border-green-400/40 px-2.5 py-1.5 text-xs text-green-100">Mark Paid</button>
               </form>
             ))}
+            {member.orders.filter((order) => (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment).map((order) => (
+              <div key={`${order.id}-pending-confirmation`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-300/25 bg-blue-500/10 px-3 py-2">
+                <span className="text-sm">{order.itemName}</span>
+                <span className="text-xs text-blue-100">Awaiting member confirmation</span>
+              </div>
+            ))}
           </div>
         </div>
       ))}
@@ -1717,20 +1825,50 @@ function TrackingNeededView({ orders }: { orders: OrderWithRelations[] }) {
 
 function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
   const unpaid = orders.filter((order) => !(order.adminPaidMember || order.memberPaid));
-  const paid = orders.filter((order) => order.adminPaidMember || order.memberPaid);
+  const paymentSent = orders.filter((order) => (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment);
+  const confirmed = orders.filter((order) => order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived));
+  const done = orders.filter((order) => order.memberMarkedDone || order.profitReceived);
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-4">
       <div className="rounded-lg border border-green-400/20 bg-panel/80 p-4 shadow-glow">
         <div className="text-xs uppercase tracking-[.12em] text-muted">Amount Owed To Me</div>
         <div className="mt-2 text-3xl font-semibold">{money(unpaid.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculateFinancials(order).amountOwed), 0))}</div>
       </div>
       <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
-        <div className="text-xs uppercase tracking-[.12em] text-muted">Paid Orders</div>
-        <div className="mt-2 text-3xl font-semibold">{paid.length}</div>
+        <div className="text-xs uppercase tracking-[.12em] text-muted">Payment Sent</div>
+        <div className="mt-2 text-3xl font-semibold">{paymentSent.length}</div>
       </div>
       <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
-        <div className="text-xs uppercase tracking-[.12em] text-muted">Open Orders</div>
-        <div className="mt-2 text-3xl font-semibold">{unpaid.length}</div>
+        <div className="text-xs uppercase tracking-[.12em] text-muted">Confirmed</div>
+        <div className="mt-2 text-3xl font-semibold">{confirmed.length}</div>
+      </div>
+      <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
+        <div className="text-xs uppercase tracking-[.12em] text-muted">Done</div>
+        <div className="mt-2 text-3xl font-semibold">{done.length}</div>
+      </div>
+      </div>
+      <div className="space-y-2">
+        {paymentSent.map((order) => (
+          <form key={order.id} action={quickAction} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-300/30 bg-blue-500/10 px-3 py-2">
+            <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+            <input type="hidden" name="id" value={order.id} />
+            <input type="hidden" name="action" value="memberConfirmPayment" />
+            <span className="text-sm">{order.itemName}</span>
+            <span className="text-sm text-muted">{money(order.memberPayoutAmount ?? calculateFinancials(order).amountOwed)}</span>
+            <button className="rounded-md border border-blue-300/40 px-2.5 py-1.5 text-xs text-blue-100">Confirm Payment</button>
+          </form>
+        ))}
+        {confirmed.map((order) => (
+          <form key={order.id} action={quickAction} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-green-300/30 bg-green-500/10 px-3 py-2">
+            <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+            <input type="hidden" name="id" value={order.id} />
+            <input type="hidden" name="action" value="memberDone" />
+            <span className="text-sm">{order.itemName}</span>
+            <span className="text-xs text-green-100">Payment confirmed</span>
+            <button className="rounded-md border border-green-300/40 px-2.5 py-1.5 text-xs text-green-100">Mark Done</button>
+          </form>
+        ))}
       </div>
     </div>
   );
