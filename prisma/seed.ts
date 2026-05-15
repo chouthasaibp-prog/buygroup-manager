@@ -4,22 +4,16 @@ const prisma = new PrismaClient();
 
 async function main() {
   for (const name of ["LAEB", "Electronic Buyers"]) {
-    await prisma.buyGroup.upsert({
-      where: { name },
-      update: {},
-      create: { name }
-    });
+    const existing = await prisma.buyGroup.findFirst({ where: { name, userId: null } });
+    if (!existing) await prisma.buyGroup.create({ data: { name } });
   }
 
   for (const warehouse of [
       { name: "LAEB", code: "LAEB" },
       { name: "Electronic Buyers", code: "EB" }
     ]) {
-    await prisma.warehouse.upsert({
-      where: { code: warehouse.code },
-      update: {},
-      create: warehouse
-    });
+    const existing = await prisma.warehouse.findFirst({ where: { code: warehouse.code, userId: null } });
+    if (!existing) await prisma.warehouse.create({ data: warehouse });
   }
 
   for (const name of [
@@ -30,11 +24,8 @@ async function main() {
     "Sai BP Business",
     "Bristle and Co Amazon"
   ]) {
-    await prisma.amazonAccount.upsert({
-      where: { name },
-      update: {},
-      create: { name }
-    });
+    const existing = await prisma.amazonAccount.findFirst({ where: { name, userId: null } });
+    if (!existing) await prisma.amazonAccount.create({ data: { name } });
   }
 }
 

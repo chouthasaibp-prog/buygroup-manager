@@ -52,7 +52,7 @@ async function main() {
   for (const account of data.tables.amazonAccounts) {
     const oldId = stringValue(account, "id");
     const name = stringValue(account, "name");
-    const existing = await prisma.amazonAccount.findUnique({ where: { name } });
+    const existing = await prisma.amazonAccount.findFirst({ where: { name, userId: null } });
     const saved = existing
       ? await prisma.amazonAccount.update({
           where: { id: existing.id },
@@ -81,7 +81,7 @@ async function main() {
   for (const buyGroup of data.tables.buyGroups) {
     const oldId = stringValue(buyGroup, "id");
     const name = stringValue(buyGroup, "name");
-    const existing = await prisma.buyGroup.findUnique({ where: { name } });
+    const existing = await prisma.buyGroup.findFirst({ where: { name, userId: null } });
     const saved = existing
       ? await prisma.buyGroup.update({
           where: { id: existing.id },
@@ -106,8 +106,8 @@ async function main() {
     const oldId = stringValue(warehouse, "id");
     const name = stringValue(warehouse, "name");
     const code = stringValue(warehouse, "code");
-    const existingByCode = await prisma.warehouse.findUnique({ where: { code } });
-    const existingByName = existingByCode ?? (await prisma.warehouse.findUnique({ where: { name } }));
+    const existingByCode = await prisma.warehouse.findFirst({ where: { code, userId: null } });
+    const existingByName = existingByCode ?? (await prisma.warehouse.findFirst({ where: { name, userId: null } }));
     const saved = existingByName
       ? await prisma.warehouse.update({
           where: { id: existingByName.id },

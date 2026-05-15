@@ -14,10 +14,13 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
     "data:export": "tsx scripts/export-sqlite.ts",
-    "data:import": "tsx scripts/import-supabase.ts"
+    "data:import": "tsx scripts/import-supabase.ts",
+    "data:assign-user": "tsx scripts/assign-user.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",
+    "@supabase/ssr": "^0.10.3",
+    "@supabase/supabase-js": "^2.105.4",
     "clsx": "latest",
     "lucide-react": "latest",
     "next": "latest",

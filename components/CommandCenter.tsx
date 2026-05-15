@@ -2,8 +2,9 @@
 
 import { useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, OrderStage, Warehouse } from "@prisma/client";
-import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, Package, Plus, Search, Settings, Upload } from "lucide-react";
+import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
 import { addTracking, createAmazonAccount, createBuyGroup, createOrder, deleteOrder, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder } from "@/app/actions";
+import { signOut } from "@/app/login/actions";
 import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels, stages } from "@/lib/domain";
 
 type Props = {
@@ -22,6 +23,7 @@ type Props = {
     realizedProfit: number;
     unrealizedProfit: number;
   };
+  userEmail: string;
 };
 
 const nav = [
@@ -80,7 +82,7 @@ function reminderTone(severity: Reminder["severity"]) {
   return "border-slate-500/40 bg-slate-500/10";
 }
 
-export default function CommandCenter({ orders, accounts, buyGroups, reminders, totals }: Props) {
+export default function CommandCenter({ orders, accounts, buyGroups, reminders, totals, userEmail }: Props) {
   const [section, setSection] = useState<(typeof nav)[number]["key"]>("dashboard");
   const [stage, setStage] = useState<OrderStage | "ALL">("ORDERED");
   const [query, setQuery] = useState("");
@@ -121,7 +123,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, reminders, 
           </div>
           <div>
             <div className="text-sm font-semibold text-white">Buy Group Ops</div>
-            <div className="text-xs text-cyan/80">Local command center</div>
+            <div className="max-w-40 truncate text-xs text-cyan/80">{userEmail}</div>
           </div>
         </div>
         <nav className="space-y-1">
@@ -150,10 +152,18 @@ export default function CommandCenter({ orders, accounts, buyGroups, reminders, 
             <div className="text-xs uppercase tracking-[.18em] text-cyan/80">Today</div>
             <h1 className="text-xl font-semibold text-white">What needs action?</h1>
           </div>
-          <button onClick={() => setNewOrderOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon hover:bg-cyan/30">
-            <Plus size={17} />
-            New Order
-          </button>
+          <div className="flex items-center gap-2">
+            <form action={signOut}>
+              <button className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white" title="Log out">
+                <LogOut size={16} />
+                Logout
+              </button>
+            </form>
+            <button onClick={() => setNewOrderOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon hover:bg-cyan/30">
+              <Plus size={17} />
+              New Order
+            </button>
+          </div>
         </header>
 
         <div className="px-4 py-5 md:px-7">

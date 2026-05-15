@@ -13,6 +13,8 @@ Use the same values that are working locally, but do not commit them to the repo
 ```text
 DATABASE_URL
 DIRECT_URL
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY
 ```
 
 `DATABASE_URL` is the pooled Supabase connection used by the running app.
@@ -33,7 +35,14 @@ postgresql://postgres.PROJECT_REF:PASSWORD@aws-1-us-east-1.pooler.supabase.com:5
 
 If your password contains special characters like `$`, `@`, `/`, `?`, `#`, or `&`, URL-encode them in both URLs. For example, `$` becomes `%24`.
 
-Add both variables to every Vercel environment you plan to use:
+Add the two Supabase Auth variables from **Supabase Project Settings > API**:
+
+```text
+NEXT_PUBLIC_SUPABASE_URL=https://iwjctjgdvlubumzyeuck.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<your anon public key>
+```
+
+Add all four variables to every Vercel environment you plan to use:
 
 - Production
 - Preview
@@ -95,11 +104,19 @@ npm run build
 ```text
 DATABASE_URL
 DIRECT_URL
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY
 ```
 
 6. Click **Deploy**.
 
-7. After deploy finishes, open the Vercel URL and verify the old imported orders appear.
+7. After deploy finishes, open the Vercel URL, create/sign into your Supabase Auth user, and verify your orders appear.
+
+If existing imported orders do not appear yet, assign the preserved unowned rows to your Supabase Auth user id:
+
+```bash
+npm run data:assign-user -- <supabase-auth-user-id>
+```
 
 ## Local Preflight Before Deploy
 

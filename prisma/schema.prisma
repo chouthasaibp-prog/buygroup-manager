@@ -21,25 +21,38 @@ enum OrderStage {
 
 model AmazonAccount {
   id                       String   @id @default(cuid())
-  name                     String   @unique
+  userId                   String?
+  name                     String
   defaultCreditCardDueDays Int?
   createdAt                DateTime @default(now())
   orders                   Order[]
+
+  @@unique([userId, name])
+  @@index([userId])
 }
 
 model BuyGroup {
   id        String   @id @default(cuid())
-  name      String   @unique
+  userId    String?
+  name      String
   createdAt DateTime @default(now())
   orders    Order[]
+
+  @@unique([userId, name])
+  @@index([userId])
 }
 
 model Warehouse {
   id        String   @id @default(cuid())
-  name      String   @unique
-  code      String   @unique
+  userId    String?
+  name      String
+  code      String
   createdAt DateTime @default(now())
   orders    Order[]
+
+  @@unique([userId, name])
+  @@unique([userId, code])
+  @@index([userId])
 }
 
 model Order {
@@ -73,6 +86,7 @@ model Order {
   creditCardPaidAt        DateTime?
   profitReceivedAt        DateTime?
   updatedAt               DateTime       @updatedAt
+  userId                  String?
   amazonAccountId         String?
   buyGroupId              String?
   warehouseId             String?
@@ -80,6 +94,7 @@ model Order {
   buyGroup                BuyGroup?      @relation(fields: [buyGroupId], references: [id], onDelete: SetNull)
   warehouse               Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
 
+  @@index([userId])
   @@index([currentStage])
   @@index([amazonAccountId])
   @@index([buyGroupId])

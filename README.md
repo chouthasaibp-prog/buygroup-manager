@@ -17,6 +17,8 @@ Create a local `.env` file with:
 ```text
 DATABASE_URL="..."
 DIRECT_URL="..."
+NEXT_PUBLIC_SUPABASE_URL="..."
+NEXT_PUBLIC_SUPABASE_ANON_KEY="..."
 ```
 
 Do not commit `.env` or database backup files.
@@ -24,3 +26,4 @@ Do not commit `.env` or database backup files.
 ## Deployment
 
 See [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) for the Vercel setup guide.
+See [SUPABASE_AUTH_SETUP.md](./SUPABASE_AUTH_SETUP.md) for authentication and RLS setup.

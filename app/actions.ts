@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { deriveStage } from "@/lib/domain";
+import { requireUser } from "@/lib/supabase/server";
 
 const boolFromForm = (formData: FormData, key: string) => formData.get(key) === "on" || formData.get(key) === "true";
 const numberFromForm = (formData: FormData, key: string, fallback = 0) => Number(formData.get(key) || fallback);
@@ -32,24 +33,43 @@ const destinationCodeFor = (name: string) => {
   return compact || "DEST";
 };
 
-async function destinationIdForBuyGroup(buyGroupId: string | null) {
+async function currentUserId() {
+  const user = await requireUser();
+  return user.id;
+}
+
+async function requireOwnedAmazonAccountId(userId: string, id: string | null) {
+  if (!id) return null;
+  const account = await prisma.amazonAccount.findFirst({ where: { id, userId }, select: { id: true } });
+  if (!account) throw new Error("Amazon account not found.");
+  return account.id;
+}
+
+async function requireOwnedBuyGroupId(userId: string, id: string | null) {
+  if (!id) return null;
+  const buyGroup = await prisma.buyGroup.findFirst({ where: { id, userId }, select: { id: true } });
+  if (!buyGroup) throw new Error("Buy group not found.");
+  return buyGroup.id;
+}
+
+async function destinationIdForBuyGroup(userId: string, buyGroupId: string | null) {
   if (!buyGroupId) return null;
-  const buyGroup = await prisma.buyGroup.findUnique({ where: { id: buyGroupId } });
+  const buyGroup = await prisma.buyGroup.findFirst({ where: { id: buyGroupId, userId } });
   if (!buyGroup) return null;
   const code = destinationCodeFor(buyGroup.name);
-  const existingByName = await prisma.warehouse.findUnique({ where: { name: buyGroup.name } });
+  const existingByName = await prisma.warehouse.findFirst({ where: { name: buyGroup.name, userId } });
   if (existingByName) return existingByName.id;
 
   const warehouse = await prisma.warehouse.upsert({
-    where: { code },
+    where: { userId_code: { userId, code } },
     update: { name: buyGroup.name },
-    create: { name: buyGroup.name, code }
+    create: { userId, name: buyGroup.name, code }
   });
   return warehouse.id;
 }
 
-async function deriveStagePatch(orderId: string) {
-  const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+async function deriveStagePatch(userId: string, orderId: string) {
+  const order = await prisma.order.findFirstOrThrow({ where: { id: orderId, userId } });
   await prisma.order.update({
     where: { id: orderId },
     data: { currentStage: deriveStage(order) }
@@ -57,14 +77,17 @@ async function deriveStagePatch(orderId: string) {
 }
 
 export async function createOrder(formData: FormData) {
+  const userId = await currentUserId();
   const chaseValue = String(formData.get("chaseCashbackPercent") ?? "0");
   const chaseCashbackPercent = chaseValue === "custom" ? numberFromForm(formData, "customChaseCashbackPercent") : Number(chaseValue);
-  const buyGroupId = optionalString(formData, "buyGroupId");
-  const destinationId = await destinationIdForBuyGroup(buyGroupId);
+  const buyGroupId = await requireOwnedBuyGroupId(userId, optionalString(formData, "buyGroupId"));
+  const destinationId = await destinationIdForBuyGroup(userId, buyGroupId);
   const trackingNumber = optionalAmazonTrackingNumber(formData);
+  const amazonAccountId = await requireOwnedAmazonAccountId(userId, optionalString(formData, "amazonAccountId"));
 
   const order = await prisma.order.create({
     data: {
+      userId,
       itemName: String(formData.get("itemName") ?? "").trim() || "Untitled order",
       quantity: Math.max(1, numberFromForm(formData, "quantity", 1)),
       retailPrice: numberFromForm(formData, "retailPrice"),
@@ -77,19 +100,20 @@ export async function createOrder(formData: FormData) {
       trackingNumber,
       trackingAddedAt: trackingNumber ? new Date() : null,
       notes: optionalString(formData, "notes"),
-      amazonAccountId: optionalString(formData, "amazonAccountId"),
+      amazonAccountId,
       buyGroupId,
       warehouseId: destinationId
     }
   });
 
-  await deriveStagePatch(order.id);
+  await deriveStagePatch(userId, order.id);
   revalidatePath("/");
 }
 
 export async function updateOrder(formData: FormData) {
+  const userId = await currentUserId();
   const id = String(formData.get("id"));
-  const existing = await prisma.order.findUniqueOrThrow({ where: { id } });
+  const existing = await prisma.order.findFirstOrThrow({ where: { id, userId } });
   const trackingNumber = optionalAmazonTrackingNumber(formData);
   const trackingSubmitted = !!trackingNumber && boolFromForm(formData, "trackingSubmitted");
   const delivered = !!trackingNumber && boolFromForm(formData, "delivered");
@@ -99,8 +123,9 @@ export async function updateOrder(formData: FormData) {
   const profitReceived = creditCardPaid && boolFromForm(formData, "profitReceived");
   const chaseValue = String(formData.get("chaseCashbackPercent") ?? existing.chaseCashbackPercent);
   const chaseCashbackPercent = chaseValue === "custom" ? numberFromForm(formData, "customChaseCashbackPercent") : Number(chaseValue);
-  const buyGroupId = optionalString(formData, "buyGroupId");
-  const destinationId = await destinationIdForBuyGroup(buyGroupId);
+  const buyGroupId = await requireOwnedBuyGroupId(userId, optionalString(formData, "buyGroupId"));
+  const destinationId = await destinationIdForBuyGroup(userId, buyGroupId);
+  const amazonAccountId = await requireOwnedAmazonAccountId(userId, optionalString(formData, "amazonAccountId"));
 
   await prisma.order.update({
     where: { id },
@@ -122,7 +147,7 @@ export async function updateOrder(formData: FormData) {
       creditCardPaid,
       profitReceived,
       notes: optionalString(formData, "notes"),
-      amazonAccountId: optionalString(formData, "amazonAccountId"),
+      amazonAccountId,
       buyGroupId,
       warehouseId: destinationId,
       manualCreditCardDueDate: optionalString(formData, "manualCreditCardDueDate")
@@ -138,14 +163,15 @@ export async function updateOrder(formData: FormData) {
     }
   });
 
-  await deriveStagePatch(id);
+  await deriveStagePatch(userId, id);
   revalidatePath("/");
 }
 
 export async function addTracking(formData: FormData) {
+  const userId = await currentUserId();
   const id = String(formData.get("id"));
   const trackingNumber = optionalAmazonTrackingNumber(formData);
-  const existing = await prisma.order.findUniqueOrThrow({ where: { id } });
+  const existing = await prisma.order.findFirstOrThrow({ where: { id, userId } });
 
   await prisma.order.update({
     where: { id },
@@ -155,14 +181,15 @@ export async function addTracking(formData: FormData) {
     }
   });
 
-  await deriveStagePatch(id);
+  await deriveStagePatch(userId, id);
   revalidatePath("/");
 }
 
 export async function quickAction(formData: FormData) {
+  const userId = await currentUserId();
   const id = String(formData.get("id"));
   const action = String(formData.get("action"));
-  const order = await prisma.order.findUniqueOrThrow({ where: { id } });
+  const order = await prisma.order.findFirstOrThrow({ where: { id, userId } });
   const now = new Date();
   const data = {} as Record<string, unknown>;
 
@@ -205,15 +232,18 @@ export async function quickAction(formData: FormData) {
 
   if (Object.keys(data).length > 0) {
     await prisma.order.update({ where: { id }, data });
-    await deriveStagePatch(id);
+    await deriveStagePatch(userId, id);
   }
 
   revalidatePath("/");
 }
 
 export async function setAccountDefaultDueDays(formData: FormData) {
+  const userId = await currentUserId();
+  const id = String(formData.get("id"));
+  await prisma.amazonAccount.findFirstOrThrow({ where: { id, userId }, select: { id: true } });
   await prisma.amazonAccount.update({
-    where: { id: String(formData.get("id")) },
+    where: { id },
     data: { defaultCreditCardDueDays: numberFromForm(formData, "defaultCreditCardDueDays", 7) }
   });
 
@@ -221,13 +251,15 @@ export async function setAccountDefaultDueDays(formData: FormData) {
 }
 
 export async function createAmazonAccount(formData: FormData) {
+  const userId = await currentUserId();
   const name = optionalString(formData, "name");
   if (!name) return;
 
   await prisma.amazonAccount.upsert({
-    where: { name },
+    where: { userId_name: { userId, name } },
     update: {},
     create: {
+      userId,
       name,
       defaultCreditCardDueDays: numberFromForm(formData, "defaultCreditCardDueDays", 7)
     }
@@ -237,42 +269,47 @@ export async function createAmazonAccount(formData: FormData) {
 }
 
 export async function createBuyGroup(formData: FormData) {
+  const userId = await currentUserId();
   const name = optionalString(formData, "name");
   if (!name) return;
 
   await prisma.buyGroup.upsert({
-    where: { name },
+    where: { userId_name: { userId, name } },
     update: {},
-    create: { name }
+    create: { userId, name }
   });
   const code = destinationCodeFor(name);
   await prisma.warehouse.upsert({
-    where: { code },
+    where: { userId_code: { userId, code } },
     update: { name },
-    create: { name, code }
+    create: { userId, name, code }
   });
 
   revalidatePath("/");
 }
 
 export async function deleteOrder(formData: FormData) {
+  const userId = await currentUserId();
   const id = String(formData.get("id"));
   if (!id) return;
 
+  await prisma.order.findFirstOrThrow({ where: { id, userId }, select: { id: true } });
   await prisma.order.delete({ where: { id } });
   revalidatePath("/");
 }
 
 export async function setOrderBuyGroup(formData: FormData) {
+  const userId = await currentUserId();
   const id = String(formData.get("id"));
-  const buyGroupId = optionalString(formData, "buyGroupId");
+  const buyGroupId = await requireOwnedBuyGroupId(userId, optionalString(formData, "buyGroupId"));
   if (!id || !buyGroupId) return;
+  await prisma.order.findFirstOrThrow({ where: { id, userId }, select: { id: true } });
 
   await prisma.order.update({
     where: { id },
     data: {
       buyGroupId,
-      warehouseId: await destinationIdForBuyGroup(buyGroupId)
+      warehouseId: await destinationIdForBuyGroup(userId, buyGroupId)
     }
   });
 
