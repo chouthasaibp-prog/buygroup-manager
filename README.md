@@ -27,3 +27,5 @@ Do not commit `.env` or database backup files.
 
 See [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) for the Vercel setup guide.
 See [SUPABASE_AUTH_SETUP.md](./SUPABASE_AUTH_SETUP.md) for authentication and RLS setup.
+
+Vercel auto-deploys new pushes to `main`.
