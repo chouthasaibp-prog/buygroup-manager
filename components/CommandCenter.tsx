@@ -1,9 +1,9 @@
 "use client";
 
 import { useActionState, useMemo, useState } from "react";
-import type { AmazonAccount, BuyGroup, OrderStage, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
+import type { AmazonAccount, BuyGroup, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
 import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
+import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
@@ -13,6 +13,7 @@ type Props = {
   buyGroups: BuyGroup[];
   warehouses: Warehouse[];
   reminders: Reminder[];
+  trackingChangeAlerts: TrackingChangeAlertItem[];
   totals: {
     openOrders: number;
     overdueReminders: number;
@@ -35,6 +36,11 @@ type Props = {
   activeWorkspace: WorkspaceSwitcherItem;
   workspaces: WorkspaceSwitcherItem[];
   workspaceMembers: WorkspaceMemberItem[];
+};
+
+type TrackingChangeAlertItem = TrackingChangeAlert & {
+  order: OrderWithRelations;
+  member: Profile | null;
 };
 
 type WorkspaceSwitcherItem = {
@@ -388,7 +394,7 @@ function stageToneKey(stage: StageFilter): OrderStage {
   return stage;
 }
 
-export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
+export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, trackingChangeAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
@@ -502,7 +508,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
         </header>
 
         <div className="px-4 py-5 md:px-7">
-          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} viewMode={viewMode} />}
+          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} viewMode={viewMode} />}
           {section === "orders" && (
             <OrdersView
               orders={filteredOrders}
@@ -569,10 +575,11 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   );
 }
 
-function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage, setSelectedOrder, activeWorkspace, viewMode }: {
+function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, totals, setSection, setStage, setSelectedOrder, activeWorkspace, viewMode }: {
   orders: OrderWithRelations[];
   buyGroups: BuyGroup[];
   reminders: Reminder[];
+  trackingChangeAlerts: TrackingChangeAlertItem[];
   totals: Props["totals"];
   setSection: (value: string) => void;
   setStage: (value: StageFilter) => void;
@@ -656,18 +663,28 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
           </div>
         </div>
       </section>
-      <InboxPanel reminders={reminders} buyGroups={buyGroups} setSelectedOrder={setSelectedOrder} />
+      <InboxPanel reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} buyGroups={buyGroups} setSelectedOrder={setSelectedOrder} />
     </div>
   );
 }
 
-function InboxPanel({ reminders, buyGroups, setSelectedOrder }: { reminders: Reminder[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void }) {
+function InboxPanel({ reminders, trackingChangeAlerts, buyGroups, setSelectedOrder }: { reminders: Reminder[]; trackingChangeAlerts: TrackingChangeAlertItem[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void }) {
   return (
     <section className="rounded-lg border border-slate-500/30 bg-panel/80 p-4 shadow-glow">
       <div className="mb-4 flex items-center gap-2">
         <Inbox size={18} className="text-blue-300" />
         <h2 className="font-semibold">Inbox / Needs Attention</h2>
       </div>
+      {trackingChangeAlerts.length > 0 && (
+        <div className="mb-5">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-[.15em] text-muted">Tracking Changes</div>
+          <div className="space-y-2">
+            {trackingChangeAlerts.slice(0, 8).map((alert) => (
+              <TrackingChangeAlertCard key={alert.id} alert={alert} setSelectedOrder={setSelectedOrder} />
+            ))}
+          </div>
+        </div>
+      )}
       {(["overdue", "today", "upcoming"] as const).map((group) => (
         <div key={group} className="mb-5 last:mb-0">
           <div className="mb-2 text-xs font-semibold uppercase tracking-[.15em] text-muted">{group === "today" ? "Due Today" : group}</div>
@@ -692,6 +709,39 @@ function InboxPanel({ reminders, buyGroups, setSelectedOrder }: { reminders: Rem
         </div>
       ))}
     </section>
+  );
+}
+
+function TrackingChangeAlertCard({ alert, setSelectedOrder }: { alert: TrackingChangeAlertItem; setSelectedOrder: (order: OrderWithRelations) => void }) {
+  const memberLabel = alert.member ? [alert.member.firstName, alert.member.lastName].filter(Boolean).join(" ").trim() || alert.member.name || alert.member.email : memberName(alert.order);
+  return (
+    <div className="rounded-lg border border-blue-300/40 bg-blue-500/10 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Tracking number changed by member. Review and update warehouse submission if needed.</div>
+          <div className="mt-1 text-xs text-muted">{memberLabel} · {alert.order.itemName} · changed {dateTime(alert.changedAt)}</div>
+          <div className="mt-2 grid gap-1 text-xs text-blue-100 sm:grid-cols-2">
+            <div className="rounded-md border border-white/10 bg-black/15 px-2 py-1">Old: <span className="text-white">{alert.oldTrackingNumber || "Empty"}</span></div>
+            <div className="rounded-md border border-white/10 bg-black/15 px-2 py-1">New: <span className="text-white">{alert.newTrackingNumber || "Empty"}</span></div>
+          </div>
+        </div>
+        <button onClick={() => setSelectedOrder(alert.order)} className="rounded-md border border-line p-1.5 text-muted hover:text-white" title="Open order">
+          <ChevronRight size={15} />
+        </button>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <form action={reviewTrackingChangeAlert}>
+          <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+          <input type="hidden" name="alertId" value={alert.id} />
+          <button className="rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium hover:bg-white/20">Mark reviewed</button>
+        </form>
+        <form action={markWarehouseTrackingUpdated}>
+          <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+          <input type="hidden" name="alertId" value={alert.id} />
+          <button className="rounded-md border border-blue-300/40 px-2.5 py-1.5 text-xs text-blue-100 hover:bg-blue-400/10">Warehouse tracking updated</button>
+        </form>
+      </div>
+    </div>
   );
 }
 

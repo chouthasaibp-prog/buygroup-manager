@@ -87,6 +87,30 @@ async function deriveStagePatch(workspaceId: string, orderId: string) {
   });
 }
 
+async function createTrackingChangeAlert({
+  workspaceId,
+  orderId,
+  memberProfileId,
+  oldTrackingNumber,
+  newTrackingNumber
+}: {
+  workspaceId: string;
+  orderId: string;
+  memberProfileId: string;
+  oldTrackingNumber: string | null;
+  newTrackingNumber: string | null;
+}) {
+  await prisma.trackingChangeAlert.create({
+    data: {
+      workspaceId,
+      orderId,
+      memberProfileId,
+      oldTrackingNumber,
+      newTrackingNumber
+    }
+  });
+}
+
 export async function createOrder(formData: FormData) {
   const context = await requireWorkspaceActionContext(formData);
   const isPersonal = context.activeWorkspace.type === "PERSONAL";
@@ -250,6 +274,16 @@ export async function updateOrder(formData: FormData) {
     }
   });
 
+  if (!isPersonal && !isOperatorAdmin && existing.memberSubmittedTrackingToAdmin && trackingNumber !== existing.trackingNumber) {
+    await createTrackingChangeAlert({
+      workspaceId,
+      orderId: id,
+      memberProfileId: context.profile.id,
+      oldTrackingNumber: existing.trackingNumber,
+      newTrackingNumber: trackingNumber
+    });
+  }
+
   await deriveStagePatch(workspaceId, id);
   revalidatePath("/");
 }
@@ -296,12 +330,63 @@ export async function addTracking(_previousState: AddTrackingState, formData: Fo
       }
     });
 
+    if (!isPersonal && existing.memberSubmittedTrackingToAdmin && trackingNumber !== existing.trackingNumber) {
+      await createTrackingChangeAlert({
+        workspaceId,
+        orderId: id,
+        memberProfileId: context.profile.id,
+        oldTrackingNumber: existing.trackingNumber,
+        newTrackingNumber: trackingNumber
+      });
+    }
+
     await deriveStagePatch(workspaceId, id);
     revalidatePath("/");
     return { error: null };
   } catch {
     return { error: "Unable to submit tracking. Please try again." };
   }
+}
+
+export async function reviewTrackingChangeAlert(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  if (context.activeWorkspace.type !== "OPERATOR" || !context.isAdmin) {
+    throw new Error("Only workspace admins can review tracking alerts.");
+  }
+
+  const id = String(formData.get("alertId") ?? "");
+  await prisma.trackingChangeAlert.updateMany({
+    where: {
+      id,
+      workspaceId: context.activeWorkspace.id,
+      reviewedAt: null
+    },
+    data: { reviewedAt: new Date() }
+  });
+
+  revalidatePath("/");
+}
+
+export async function markWarehouseTrackingUpdated(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  if (context.activeWorkspace.type !== "OPERATOR" || !context.isAdmin) {
+    throw new Error("Only workspace admins can update tracking alerts.");
+  }
+
+  const id = String(formData.get("alertId") ?? "");
+  const now = new Date();
+  await prisma.trackingChangeAlert.updateMany({
+    where: {
+      id,
+      workspaceId: context.activeWorkspace.id
+    },
+    data: {
+      warehouseTrackingUpdatedAt: now,
+      reviewedAt: now
+    }
+  });
+
+  revalidatePath("/");
 }
 
 export async function quickAction(formData: FormData) {

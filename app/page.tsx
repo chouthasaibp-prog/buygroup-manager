@@ -15,7 +15,7 @@ export default async function Home({ searchParams }: Props) {
   const context = await getWorkspaceContext(params.workspace);
   const workspaceWhere = { workspaceId: context.activeWorkspace.id };
   const orderWhere = orderVisibilityWhere(context);
-  const [orders, accounts, buyGroups, warehouses, workspaceMembers] = await Promise.all([
+  const [orders, accounts, buyGroups, warehouses, workspaceMembers, trackingChangeAlerts] = await Promise.all([
     prisma.order.findMany({
       where: orderWhere,
       orderBy: [{ updatedAt: "desc" }],
@@ -29,6 +29,19 @@ export default async function Home({ searchParams }: Props) {
           where: { workspaceId: context.activeWorkspace.id },
           include: { profile: true },
           orderBy: [{ role: "asc" }, { createdAt: "asc" }]
+        })
+      : Promise.resolve([]),
+    context.isAdmin && context.activeWorkspace.type === "OPERATOR"
+      ? prisma.trackingChangeAlert.findMany({
+          where: {
+            workspaceId: context.activeWorkspace.id,
+            reviewedAt: null
+          },
+          orderBy: { changedAt: "desc" },
+          include: {
+            order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true } },
+            member: true
+          }
         })
       : Promise.resolve([])
   ]);
@@ -104,6 +117,7 @@ export default async function Home({ searchParams }: Props) {
       buyGroups={buyGroups}
       warehouses={warehouses}
       reminders={reminders}
+      trackingChangeAlerts={trackingChangeAlerts}
       totals={{ ...totals, openOrders: openOrders.length, overdueReminders: reminders.filter((item) => item.severity === "overdue").length }}
       userEmail={context.profile.email}
       profile={{

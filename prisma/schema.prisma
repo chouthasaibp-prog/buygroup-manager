@@ -50,6 +50,7 @@ model Profile {
   createdOrders          Order[]           @relation("OrderCreatedBy")
   submittedOrders        Order[]           @relation("OrderSubmittedBy")
   assignedOperatorOrders Order[]           @relation("OrderAssignedOperator")
+  trackingChangeAlerts   TrackingChangeAlert[] @relation("TrackingChangeAlertMember")
 
   @@index([email])
 }
@@ -68,6 +69,7 @@ model Workspace {
   buyGroups      BuyGroup[]
   warehouses     Warehouse[]
   orders         Order[]
+  trackingChangeAlerts TrackingChangeAlert[]
 
   @@index([ownerProfileId])
   @@index([type])
@@ -211,6 +213,7 @@ model Order {
   amazonAccount                      AmazonAccount? @relation(fields: [amazonAccountId], references: [id], onDelete: SetNull)
   buyGroup                           BuyGroup?      @relation(fields: [buyGroupId], references: [id], onDelete: SetNull)
   warehouse                          Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  trackingChangeAlerts               TrackingChangeAlert[]
 
   @@index([userId])
   @@index([workspaceId])
@@ -223,4 +226,26 @@ model Order {
   @@index([amazonAccountId])
   @@index([buyGroupId])
   @@index([warehouseId])
+}
+
+model TrackingChangeAlert {
+  id                         String    @id @default(cuid())
+  workspaceId                String
+  orderId                    String
+  memberProfileId            String?
+  oldTrackingNumber          String?
+  newTrackingNumber          String?
+  changedAt                  DateTime  @default(now())
+  reviewedAt                 DateTime?
+  warehouseTrackingUpdatedAt DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+  workspace                  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  order                      Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  member                     Profile?  @relation("TrackingChangeAlertMember", fields: [memberProfileId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, reviewedAt])
+  @@index([workspaceId, changedAt])
+  @@index([orderId])
+  @@index([memberProfileId])
 }
