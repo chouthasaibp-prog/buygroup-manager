@@ -56,6 +56,7 @@ type OrderCardAlert = {
   label: string;
   detail?: string;
   action?: "submitToWarehouse" | "open";
+  reviewAction?: "reviewDeliveryBeforeTracking" | "reviewTrackingChange";
 };
 
 type WorkspaceSwitcherItem = {
@@ -416,7 +417,8 @@ function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewM
       priority: "high",
       label: "Urgent: delivered before warehouse tracking submission.",
       detail: order.trackingNumber ? `Tracking ${order.trackingNumber}` : "Tracking missing",
-      action: order.trackingNumber ? "submitToWarehouse" : "open"
+      action: order.trackingNumber ? "submitToWarehouse" : "open",
+      reviewAction: urgentAlert ? "reviewDeliveryBeforeTracking" : undefined
     });
   }
 
@@ -427,7 +429,8 @@ function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewM
       priority: "normal",
       label: "Tracking number changed by member.",
       detail: `${alert.oldTrackingNumber || "Empty"} -> ${alert.newTrackingNumber || "Empty"}`,
-      action: "open"
+      action: "open",
+      reviewAction: "reviewTrackingChange"
     });
   }
 
@@ -1256,6 +1259,20 @@ function OrderCardAlerts({ order, alerts, onOpen }: { order: OrderWithRelations;
               </form>
             ) : (
               <button type="button" onClick={onOpen} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white hover:bg-white/10">Open</button>
+            )}
+            {alert.reviewAction === "reviewDeliveryBeforeTracking" && (
+              <form action={reviewDeliveryBeforeTrackingAlert}>
+                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                <input type="hidden" name="alertId" value={alert.id} />
+                <button className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white hover:bg-white/10">Mark reviewed</button>
+              </form>
+            )}
+            {alert.reviewAction === "reviewTrackingChange" && (
+              <form action={reviewTrackingChangeAlert}>
+                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                <input type="hidden" name="alertId" value={alert.id} />
+                <button className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white hover:bg-white/10">Mark reviewed</button>
+              </form>
             )}
           </div>
         ))}
