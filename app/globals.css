@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  background: #080b12;
+  --cyan: #4da3ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    linear-gradient(135deg, rgba(77, 163, 255, .08), transparent 28%),
+    linear-gradient(215deg, rgba(61, 220, 132, .045), transparent 32%),
+    linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px),
+    linear-gradient(180deg, #080b12 0%, #0c111b 48%, #070a10 100%);
+  background-size: auto, auto, 42px 42px, 42px 42px, auto;
+  color: #f4f7fb;
+  min-height: 100vh;
+}
+
+body::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, transparent, rgba(77, 163, 255, .075), transparent),
+    repeating-linear-gradient(180deg, rgba(255,255,255,.025) 0, rgba(255,255,255,.025) 1px, transparent 1px, transparent 7px);
+  mix-blend-mode: screen;
+  opacity: .22;
+}
+
+main,
+aside,
+header {
+  position: relative;
+  z-index: 1;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  background: rgba(7, 11, 20, .82);
+  border: 1px solid rgba(74, 90, 124, .78);
+  border-radius: 8px;
+  color: #f4f7fb;
+  outline: none;
+  transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  background: rgba(10, 17, 31, .94);
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px rgba(77, 163, 255, .14), 0 0 22px rgba(77, 163, 255, .12);
+}
+
+button {
+  transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease, box-shadow .16s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+.shadow-glow {
+  position: relative;
+}
+
+.shadow-glow::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(120deg, rgba(77, 163, 255, .10), transparent 34%, rgba(61, 220, 132, .06));
+  opacity: .65;
+}
+
+.shadow-glow > * {
+  position: relative;
+}
+
+::selection {
+  background: rgba(77, 163, 255, .35);
+}

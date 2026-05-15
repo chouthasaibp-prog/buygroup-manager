@@ -1,0 +1,1093 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import type { AmazonAccount, BuyGroup, OrderStage, Warehouse } from "@prisma/client";
+import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, Package, Plus, Search, Settings, Upload } from "lucide-react";
+import { addTracking, createAmazonAccount, createBuyGroup, createOrder, deleteOrder, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder } from "@/app/actions";
+import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels, stages } from "@/lib/domain";
+
+type Props = {
+  orders: OrderWithRelations[];
+  accounts: AmazonAccount[];
+  buyGroups: BuyGroup[];
+  warehouses: Warehouse[];
+  reminders: Reminder[];
+  totals: {
+    openOrders: number;
+    overdueReminders: number;
+    totalSpent: number;
+    totalPayout: number;
+    totalCashback: number;
+    amountOwed: number;
+    realizedProfit: number;
+    unrealizedProfit: number;
+  };
+};
+
+const nav = [
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "orders", label: "Orders", icon: Package },
+  { key: "accounts", label: "Accounts", icon: CreditCard },
+  { key: "buyGroups", label: "Buy Groups", icon: Landmark },
+  { key: "analytics", label: "Analytics", icon: Bell },
+  { key: "importExport", label: "Import / Export", icon: Upload },
+  { key: "settings", label: "Settings", icon: Settings }
+] as const;
+
+const actionLabels: Record<string, string> = {
+  submitTracking: "Mark Submitted",
+  delivered: "Mark Delivered",
+  scanned: "Mark Scanned",
+  paidOut: "Mark Paid Out",
+  cardPaid: "Mark Card Paid",
+  profitReceived: "Mark Profit Received"
+};
+
+function cls(...values: Array<string | false | null | undefined>) {
+  return values.filter(Boolean).join(" ");
+}
+
+function formatAmazonOrderNumber(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 17);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 10) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+  return `${digits.slice(0, 3)}-${digits.slice(3, 10)}-${digits.slice(10)}`;
+}
+
+const stageTone: Record<OrderStage, string> = {
+  ORDERED: "border-slate-500/50 bg-slate-400/10 text-slate-100 shadow-[0_0_18px_rgba(148,163,184,.08)]",
+  TRACKING_READY: "border-blue-400/45 bg-blue-500/10 text-blue-100 shadow-[0_0_18px_rgba(77,163,255,.10)]",
+  TRACKING_SUBMITTED: "border-blue-300/55 bg-blue-400/10 text-blue-50 shadow-[0_0_18px_rgba(96,165,250,.12)]",
+  DELIVERED: "border-blue-200/45 bg-white/8 text-white shadow-[0_0_18px_rgba(191,219,254,.10)]",
+  SCANNED: "border-green-400/45 bg-green-500/10 text-green-100 shadow-[0_0_18px_rgba(61,220,132,.10)]",
+  PAID_OUT: "border-green-300/50 bg-green-400/10 text-green-50 shadow-[0_0_18px_rgba(74,222,128,.12)]",
+  CREDIT_PAID: "border-green-300/60 bg-green-400/14 text-green-50 shadow-[0_0_18px_rgba(74,222,128,.14)]",
+  PROFIT_RECEIVED: "border-white/45 bg-white/10 text-white shadow-[0_0_18px_rgba(255,255,255,.08)]"
+};
+
+function metricTone(label: string) {
+  if (label.includes("Realized")) return "border-green-400/40 bg-green-500/10";
+  if (label.includes("Unrealized")) return "border-blue-300/35 bg-blue-500/10";
+  if (label.includes("Overdue")) return "border-white/25 bg-white/8";
+  if (label.includes("Owed") || label.includes("Card")) return "border-slate-400/35 bg-slate-500/10";
+  if (label.includes("Cashback")) return "border-cyan/30 bg-cyan/10";
+  return "border-line bg-panel/80";
+}
+
+function reminderTone(severity: Reminder["severity"]) {
+  if (severity === "overdue") return "border-white/30 bg-white/10";
+  if (severity === "today") return "border-blue-300/40 bg-blue-500/10";
+  return "border-slate-500/40 bg-slate-500/10";
+}
+
+export default function CommandCenter({ orders, accounts, buyGroups, reminders, totals }: Props) {
+  const [section, setSection] = useState<(typeof nav)[number]["key"]>("dashboard");
+  const [stage, setStage] = useState<OrderStage | "ALL">("ORDERED");
+  const [query, setQuery] = useState("");
+  const [accountFilter, setAccountFilter] = useState("ALL");
+  const [buyGroupFilter, setBuyGroupFilter] = useState("ALL");
+  const [newOrderOpen, setNewOrderOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithRelations | null>(null);
+
+  const filteredOrders = useMemo(() => {
+    const q = query.toLowerCase();
+    return orders.filter((order) => {
+      const inStage = stage === "ALL" || order.currentStage === stage;
+      const inAccount = accountFilter === "ALL" || order.amazonAccountId === accountFilter;
+      const inBuyGroup = buyGroupFilter === "ALL" || order.buyGroupId === buyGroupFilter;
+      const matches =
+        order.itemName.toLowerCase().includes(q) ||
+        order.orderNumber?.toLowerCase().includes(q) ||
+        order.trackingNumber?.toLowerCase().includes(q) ||
+        order.amazonAccount?.name.toLowerCase().includes(q) ||
+        order.buyGroup?.name.toLowerCase().includes(q);
+      return inStage && inAccount && inBuyGroup && (!q || matches);
+    });
+  }, [accountFilter, buyGroupFilter, orders, query, stage]);
+
+  const counts = useMemo(() => {
+    const result = new Map<OrderStage | "ALL", number>();
+    result.set("ALL", orders.length);
+    stages.slice(1).forEach((item) => result.set(item.key as OrderStage, orders.filter((order) => order.currentStage === item.key).length));
+    return result;
+  }, [orders]);
+
+  return (
+    <main className="min-h-screen text-slate-100">
+      <aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-cyan/20 bg-surface/80 px-4 py-5 shadow-neon backdrop-blur-xl lg:block">
+        <div className="mb-7 flex items-center gap-3 px-2">
+          <div className="grid h-9 w-9 place-items-center rounded-lg border border-cyan/30 bg-cyan/10 text-cyan shadow-neon">
+            <Home size={18} />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-white">Buy Group Ops</div>
+            <div className="text-xs text-cyan/80">Local command center</div>
+          </div>
+        </div>
+        <nav className="space-y-1">
+          {nav.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                onClick={() => setSection(item.key)}
+                className={cls(
+                  "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition",
+                  section === item.key ? "border border-cyan/30 bg-cyan/10 text-cyan shadow-neon" : "text-muted hover:bg-white/5 hover:text-white"
+                )}
+              >
+                <Icon size={17} />
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
+
+      <section className="min-h-screen bg-surface/35 lg:pl-64">
+        <header className="sticky top-0 z-20 flex items-center justify-between border-b border-cyan/20 bg-surface/80 px-4 py-3 shadow-[0_12px_40px_rgba(0,0,0,.22)] backdrop-blur-xl md:px-7">
+          <div>
+            <div className="text-xs uppercase tracking-[.18em] text-cyan/80">Today</div>
+            <h1 className="text-xl font-semibold text-white">What needs action?</h1>
+          </div>
+          <button onClick={() => setNewOrderOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon hover:bg-cyan/30">
+            <Plus size={17} />
+            New Order
+          </button>
+        </header>
+
+        <div className="px-4 py-5 md:px-7">
+          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} />}
+          {section === "orders" && (
+            <OrdersView
+              orders={filteredOrders}
+              accounts={accounts}
+              buyGroups={buyGroups}
+              counts={counts}
+              stage={stage}
+              setStage={setStage}
+              query={query}
+              setQuery={setQuery}
+              accountFilter={accountFilter}
+              setAccountFilter={setAccountFilter}
+              buyGroupFilter={buyGroupFilter}
+              setBuyGroupFilter={setBuyGroupFilter}
+              setSelectedOrder={setSelectedOrder}
+            />
+          )}
+          {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} />}
+          {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} />}
+          {section === "analytics" && <AnalyticsView orders={orders} />}
+          {section === "importExport" && <ImportExportView orders={orders} />}
+          {section === "settings" && <SettingsView />}
+        </div>
+      </section>
+
+      {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} onClose={() => setNewOrderOpen(false)} />}
+      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} onClose={() => setSelectedOrder(null)} />}
+    </main>
+  );
+}
+
+function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage, setSelectedOrder }: {
+  orders: OrderWithRelations[];
+  buyGroups: BuyGroup[];
+  reminders: Reminder[];
+  totals: Props["totals"];
+  setSection: (value: "orders") => void;
+  setStage: (value: OrderStage | "ALL") => void;
+  setSelectedOrder: (order: OrderWithRelations) => void;
+}) {
+  const metrics = [
+    { label: "Open Orders", value: totals.openOrders.toString(), featured: true },
+    { label: "Amount Owed", value: money(totals.amountOwed), featured: true },
+    { label: "Realized Profit", value: money(totals.realizedProfit), featured: true },
+    { label: "Unrealized Profit", value: money(totals.unrealizedProfit), featured: true },
+    { label: "Overdue Reminders", value: totals.overdueReminders.toString(), featured: true },
+    { label: "Payout Expected", value: money(totals.totalPayout), featured: false },
+    { label: "Total Spent", value: money(totals.totalSpent), featured: false },
+    { label: "Total Cashback", value: money(totals.totalCashback), featured: false },
+    { label: "Tracking Not Submitted", value: orders.filter((order) => order.trackingNumber && !order.trackingSubmitted).length.toString(), featured: false },
+    { label: "Delivered Not Paid", value: orders.filter((order) => order.delivered && !order.paidOut).length.toString(), featured: false },
+    { label: "Paid Out, Card Open", value: orders.filter((order) => order.paidOut && !order.creditCardPaid).length.toString(), featured: false }
+  ];
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
+      <section>
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6 2xl:grid-cols-8">
+          {metrics.map((metric) => (
+            <div
+              key={metric.label}
+              className={cls(
+                "rounded-lg border shadow-glow",
+                metricTone(metric.label),
+                metric.featured ? "min-h-32 p-5 sm:col-span-2 xl:col-span-2" : "min-h-24 p-3 xl:col-span-2 2xl:col-span-1"
+              )}
+            >
+              <div className={cls("text-xs font-medium uppercase tracking-[.12em]", metric.featured ? "text-slate-300" : "text-muted")}>{metric.label}</div>
+              <div className={cls("mt-3 max-w-full break-words font-semibold leading-none text-white [overflow-wrap:anywhere]", metric.featured ? "text-[clamp(1.85rem,3vw,2.5rem)]" : "text-[clamp(1.25rem,1.8vw,1.75rem)]")}>{metric.value}</div>
+              {metric.featured && <div className="mt-3 h-1 w-16 rounded-full bg-gradient-to-r from-blue-400 to-green-400" />}
+            </div>
+          ))}
+        </div>
+        <div className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-semibold">Active Workflow Queues</h2>
+            <button onClick={() => setSection("orders")} className="text-sm text-blue-300">Open orders</button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {stages.slice(1, 8).map((item) => (
+              <button
+                key={item.key}
+                onClick={() => {
+                  setStage(item.key as OrderStage);
+                  setSection("orders");
+                }}
+                className={cls("flex items-center justify-between rounded-lg border px-4 py-3 text-left hover:shadow-neon", stageTone[item.key as OrderStage])}
+              >
+                <span>{item.label}</span>
+                <span className="rounded-md bg-black/25 px-2 py-1 text-xs text-white">{orders.filter((order) => order.currentStage === item.key).length}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+      <InboxPanel reminders={reminders} buyGroups={buyGroups} setSelectedOrder={setSelectedOrder} />
+    </div>
+  );
+}
+
+function InboxPanel({ reminders, buyGroups, setSelectedOrder }: { reminders: Reminder[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void }) {
+  return (
+    <section className="rounded-lg border border-slate-500/30 bg-panel/80 p-4 shadow-glow">
+      <div className="mb-4 flex items-center gap-2">
+        <Inbox size={18} className="text-blue-300" />
+        <h2 className="font-semibold">Inbox / Needs Attention</h2>
+      </div>
+      {(["overdue", "today", "upcoming"] as const).map((group) => (
+        <div key={group} className="mb-5 last:mb-0">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-[.15em] text-muted">{group === "today" ? "Due Today" : group}</div>
+          <div className="space-y-2">
+            {reminders.filter((item) => item.severity === group).slice(0, 8).map((item) => (
+              <div key={item.id} className={cls("rounded-lg border p-3", reminderTone(item.severity))}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">{item.label}</div>
+                    <div className="mt-1 text-xs text-muted">{item.order.itemName} · due {shortDate(item.dueDate)}</div>
+                    {item.notes && <div className="mt-1 text-xs text-blue-200">{item.notes}</div>}
+                  </div>
+                  <button onClick={() => setSelectedOrder(item.order)} className="rounded-md border border-line p-1.5 text-muted hover:text-white" title="Open order">
+                    <ChevronRight size={15} />
+                  </button>
+                </div>
+                <ReminderAction reminder={item} buyGroups={buyGroups} />
+              </div>
+            ))}
+            {reminders.filter((item) => item.severity === group).length === 0 && <div className="rounded-lg border border-dashed border-line px-3 py-4 text-sm text-muted">Clear</div>}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function ReminderAction({ reminder, buyGroups }: { reminder: Reminder; buyGroups: BuyGroup[] }) {
+  if (reminder.type === "missing_info" && reminder.notes?.includes("buy group")) {
+    return (
+      <form action={setOrderBuyGroup} className="mt-3 flex items-center gap-2">
+        <input type="hidden" name="id" value={reminder.order.id} />
+        <select name="buyGroupId" required defaultValue="" className="min-w-0 flex-1 px-2.5 py-1.5 text-xs">
+          <option value="">Set buy group</option>
+          {buyGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+        </select>
+        <button className="rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium hover:bg-white/20">Save</button>
+      </form>
+    );
+  }
+
+  if (reminder.type === "submit_tracking" && !reminder.order.trackingNumber) return null;
+  const action =
+    reminder.type === "submit_tracking" ? "submitTracking" :
+    reminder.type === "check_payout" ? "paidOut" :
+    reminder.type === "pay_credit_card" ? "cardPaid" :
+    reminder.type === "confirm_profit" ? "profitReceived" : "";
+
+  if (!action) return null;
+  return (
+    <form action={quickAction} className="mt-3 flex items-center gap-2">
+      <input type="hidden" name="id" value={reminder.order.id} />
+      <input type="hidden" name="action" value={action} />
+      <button className="rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium hover:bg-white/20">{reminder.action}</button>
+    </form>
+  );
+}
+
+function OrdersView({ orders, accounts, buyGroups, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, setSelectedOrder }: {
+  orders: OrderWithRelations[];
+  accounts: AmazonAccount[];
+  buyGroups: BuyGroup[];
+  counts: Map<OrderStage | "ALL", number>;
+  stage: OrderStage | "ALL";
+  setStage: (value: OrderStage | "ALL") => void;
+  query: string;
+  setQuery: (value: string) => void;
+  accountFilter: string;
+  setAccountFilter: (value: string) => void;
+  buyGroupFilter: string;
+  setBuyGroupFilter: (value: string) => void;
+  setSelectedOrder: (order: OrderWithRelations) => void;
+}) {
+  return (
+    <section>
+      <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-wrap gap-2">
+          {stages.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => setStage(item.key)}
+              className={cls(
+                "rounded-lg border px-3 py-2 text-sm",
+                stage === item.key
+                  ? item.key === "ALL" ? "border-cyan/40 bg-cyan/20 text-cyan shadow-neon" : stageTone[item.key as OrderStage]
+                  : "border-line bg-panel/80 text-muted hover:border-cyan/30 hover:text-white"
+              )}
+            >
+              {item.short} <span className="ml-1 text-xs opacity-70">{counts.get(item.key) ?? 0}</span>
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[760px]">
+          <label className="flex min-w-0 items-center gap-2 rounded-lg border border-cyan/20 bg-panel/80 px-3 py-2 text-muted shadow-glow">
+            <Search size={16} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search orders" className="w-full min-w-0 border-0 bg-transparent p-0 text-sm focus:shadow-none" />
+          </label>
+          <select value={accountFilter} onChange={(event) => setAccountFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
+            <option value="ALL">All Amazon accounts</option>
+            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+          </select>
+          <select value={buyGroupFilter} onChange={(event) => setBuyGroupFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
+            <option value="ALL">All buy groups</option>
+            {buyGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {orders.map((order) => <OrderQueueCard key={order.id} order={order} stage={stage} onOpen={() => setSelectedOrder(order)} />)}
+        {orders.length === 0 && <div className="rounded-lg border border-dashed border-line bg-panel/60 p-8 text-center text-muted">No orders in this queue.</div>}
+      </div>
+    </section>
+  );
+}
+
+function OrderQueueCard({ order, stage, onOpen }: { order: OrderWithRelations; stage: OrderStage | "ALL"; onOpen: () => void }) {
+  const financials = calculateFinancials(order);
+  const displayStage = stage === "ALL" ? order.currentStage : stage;
+  const fieldsByStage: Record<OrderStage, Array<[string, string]>> = {
+    ORDERED: [
+      ["Qty", String(order.quantity)],
+      ["Account", order.amazonAccount?.name ?? "Missing"],
+      ["Group", order.buyGroup?.name ?? "Missing"],
+      ["Destination", order.buyGroup?.name ?? order.warehouse?.code ?? "Missing"],
+      ["Order #", order.orderNumber ?? "Missing"],
+      ["Retail", money(order.retailPrice)],
+      ["Payout", money(order.payoutPerUnit)],
+      ["Cashback", `${order.chaseCashbackPercent}%`],
+      ["Est. Profit", money(financials.profit)],
+      ["Created", shortDate(order.createdAt)]
+    ],
+    TRACKING_READY: [
+      ["Tracking", order.trackingNumber ?? "Missing"],
+      ["Group", order.buyGroup?.name ?? "Missing"],
+      ["Destination", order.buyGroup?.name ?? order.warehouse?.code ?? "Missing"],
+      ["Account", order.amazonAccount?.name ?? "Missing"],
+      ["Created", shortDate(order.createdAt)],
+      ["Tracking Added", shortDate(order.trackingAddedAt)]
+    ],
+    TRACKING_SUBMITTED: [
+      ["Tracking", order.trackingNumber ?? "Missing"],
+      ["Destination", order.buyGroup?.name ?? order.warehouse?.code ?? "Missing"],
+      ["Submitted", shortDate(order.trackingSubmittedAt)],
+      ["Delivered", order.delivered ? "Yes" : "No"]
+    ],
+    DELIVERED: [
+      ["Group", order.buyGroup?.name ?? "Missing"],
+      ["Delivered", shortDate(order.deliveredAt)],
+      ["Total Payout", money(financials.totalPayout)],
+      ["Payout Due", shortDate(order.deliveredAt ? new Date(new Date(order.deliveredAt).getTime() + 2 * 86400000) : null)],
+      ["Tracking", order.trackingNumber ?? "Missing"]
+    ],
+    SCANNED: [
+      ["Destination", order.buyGroup?.name ?? order.warehouse?.code ?? "Missing"],
+      ["Scanned", shortDate(order.scannedAt)],
+      ["Group", order.buyGroup?.name ?? "Missing"],
+      ["Payout", order.paidOut ? "Paid" : "Open"]
+    ],
+    PAID_OUT: [
+      ["Paid Out", shortDate(order.paidOutAt)],
+      ["Amount Owed", money(financials.amountOwed)],
+      ["Unrealized Profit", money(financials.profit)],
+      ["Account", order.amazonAccount?.name ?? "Missing"],
+      ["Card", order.creditCardPaid ? "Paid" : "Open"]
+    ],
+    CREDIT_PAID: [
+      ["Card Paid", shortDate(order.creditCardPaidAt)],
+      ["Realized Profit", money(financials.profit)],
+      ["Profit Received", order.profitReceived ? "Yes" : "No"]
+    ],
+    PROFIT_RECEIVED: [
+      ["Realized Profit", money(financials.profit)],
+      ["Total Paid", money(financials.totalPaid)],
+      ["Total Payout", money(financials.totalPayout)],
+      ["Completed", shortDate(order.profitReceivedAt)],
+      ["Account", order.amazonAccount?.name ?? "Missing"],
+      ["Group", order.buyGroup?.name ?? "Missing"]
+    ]
+  };
+
+  return (
+    <article className={cls("rounded-lg border bg-panel/80 p-4 shadow-glow transition hover:-translate-y-0.5 hover:shadow-neon", stageTone[order.currentStage])}>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <button onClick={onOpen} className="min-w-0 text-left">
+          <div className="flex items-center gap-2">
+            <h3 className="truncate font-semibold">{order.itemName}</h3>
+            <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{stageLabels[order.currentStage]}</span>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {fieldsByStage[displayStage as OrderStage].map(([label, value]) => (
+              <span key={label} className="rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
+                {label}: <span className="text-white">{value}</span>
+              </span>
+            ))}
+          </div>
+        </button>
+        <StageActions order={order} onOpen={onOpen} />
+      </div>
+    </article>
+  );
+}
+
+function StageActions({ order, onOpen }: { order: OrderWithRelations; onOpen: () => void }) {
+  if (order.currentStage === "ORDERED") {
+    return (
+      <form action={addTracking} className="flex min-w-72 items-center gap-2">
+        <input type="hidden" name="id" value={order.id} />
+        <input name="trackingNumber" placeholder="Ex: TBA330706322941" onInput={(event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase(); }} className="min-w-0 flex-1 px-3 py-2 text-sm" />
+        <button className="rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon">Add Tracking</button>
+      </form>
+    );
+  }
+
+  const action =
+    order.currentStage === "TRACKING_READY" ? "submitTracking" :
+    order.currentStage === "TRACKING_SUBMITTED" ? "delivered" :
+    order.currentStage === "DELIVERED" ? "scanned" :
+    order.currentStage === "SCANNED" ? "paidOut" :
+    order.currentStage === "PAID_OUT" ? "cardPaid" :
+    order.currentStage === "CREDIT_PAID" ? "profitReceived" : "";
+
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {order.trackingNumber && (
+        <button type="button" onClick={() => navigator.clipboard?.writeText(order.trackingNumber ?? "")} className="rounded-lg border border-line p-2 text-muted hover:text-white" title="Copy tracking number">
+          <Copy size={16} />
+        </button>
+      )}
+      {action && (
+        <form action={quickAction}>
+          <input type="hidden" name="id" value={order.id} />
+          <input type="hidden" name="action" value={action} />
+          <button className="rounded-lg border border-green-400/40 bg-green-500/15 px-3 py-2 text-sm font-medium text-green-100 shadow-neon">{actionLabels[action]}</button>
+        </form>
+      )}
+      {order.currentStage === "DELIVERED" && (
+        <form action={quickAction}>
+          <input type="hidden" name="id" value={order.id} />
+          <input type="hidden" name="action" value="snoozePayout" />
+          <input type="hidden" name="days" value="3" />
+          <button className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Snooze</button>
+        </form>
+      )}
+      <button onClick={onOpen} className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Open</button>
+    </div>
+  );
+}
+
+function NewOrderModal({ accounts, buyGroups, onClose }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; onClose: () => void }) {
+  return (
+    <Modal title="New Order" onClose={onClose}>
+      <form action={createOrder} className="grid gap-4" onSubmit={() => setTimeout(onClose, 100)}>
+        <OrderFields accounts={accounts} buyGroups={buyGroups} />
+        <div className="flex justify-end gap-2 border-t border-line pt-4">
+          <button type="button" onClick={onClose} className="rounded-lg border border-line px-3 py-2 text-sm text-muted">Cancel</button>
+          <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Create Order</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function OrderPanel({ order, accounts, buyGroups, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; onClose: () => void }) {
+  const financials = calculateFinancials(order);
+  const timeline = [
+    ["Created", order.createdAt],
+    ["Tracking Added", order.trackingAddedAt],
+    ["Tracking Submitted", order.trackingSubmittedAt],
+    ["Delivered", order.deliveredAt],
+    ["Scanned", order.scannedAt],
+    ["Paid Out", order.paidOutAt],
+    ["Credit Card Paid", order.creditCardPaidAt],
+    ["Profit Received", order.profitReceivedAt],
+    ["Last Updated", order.updatedAt]
+  ];
+
+  return (
+    <Modal title={order.itemName} onClose={onClose} wide>
+      <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
+        <form action={updateOrder} className="grid gap-4" onSubmit={() => setTimeout(onClose, 100)}>
+          <input type="hidden" name="id" value={order.id} />
+          <OrderFields accounts={accounts} buyGroups={buyGroups} order={order} />
+          <div className="grid gap-3 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-2">
+            <CheckField name="trackingSubmitted" label="Tracking submitted" defaultChecked={order.trackingSubmitted} />
+            <CheckField name="delivered" label="Delivered" defaultChecked={order.delivered} />
+            <CheckField name="scanned" label="Scanned" defaultChecked={order.scanned} />
+            <CheckField name="paidOut" label="Paid out by buy group" defaultChecked={order.paidOut} />
+            <CheckField name="creditCardPaid" label="Credit card paid" defaultChecked={order.creditCardPaid} />
+            <CheckField name="profitReceived" label="Profit received" defaultChecked={order.profitReceived} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted">Manual credit card due date</label>
+            <input name="manualCreditCardDueDate" type="date" defaultValue={order.manualCreditCardDueDate ? new Date(order.manualCreditCardDueDate).toISOString().slice(0, 10) : ""} className="w-full px-3 py-2 text-sm" />
+          </div>
+          <div className="flex justify-end gap-2 border-t border-line pt-4">
+            <button type="button" onClick={onClose} className="rounded-lg border border-line px-3 py-2 text-sm text-muted">Cancel</button>
+            <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Save Changes</button>
+          </div>
+        </form>
+        <aside className="space-y-4">
+          <div className="rounded-lg border border-line bg-surface/60 p-4">
+            <div className="mb-3 text-sm font-semibold">Financials</div>
+            {[
+              ["Total Paid", money(financials.totalPaid)],
+              ["Total Payout", money(financials.totalPayout)],
+              ["Chase Cashback", money(financials.chaseCashback)],
+              ["Young Adult Cashback", money(financials.youngAdultCashback)],
+              ["Total Cashback", money(financials.totalCashback)],
+              ["Credit / Amount Owed", money(financials.amountOwed)],
+              ["Estimated Profit", money(financials.profit)],
+              ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
+            ].map(([label, value]) => <Fact key={label} label={label} value={value} />)}
+          </div>
+          <div className="rounded-lg border border-line bg-surface/60 p-4">
+            <div className="mb-3 text-sm font-semibold">Status History</div>
+            {timeline.map(([label, value]) => <Fact key={label as string} label={label as string} value={dateTime(value as Date | null)} />)}
+          </div>
+          <form
+            action={deleteOrder}
+            onSubmit={(event) => {
+              if (!window.confirm(`Delete "${order.itemName}"? This cannot be undone.`)) {
+                event.preventDefault();
+                return;
+              }
+              setTimeout(onClose, 100);
+            }}
+            className="rounded-lg border border-slate-400/30 bg-slate-500/10 p-4"
+          >
+            <input type="hidden" name="id" value={order.id} />
+            <div className="mb-2 text-sm font-semibold text-white">Delete Entry</div>
+            <p className="mb-3 text-sm text-slate-300">Remove this order from the local database.</p>
+            <button className="rounded-lg border border-slate-300/40 px-3 py-2 text-sm font-medium text-white hover:bg-white/10">Delete Order</button>
+          </form>
+        </aside>
+      </div>
+    </Modal>
+  );
+}
+
+function OrderFields({ accounts, buyGroups, order }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; order?: OrderWithRelations }) {
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      <Field label="Item name"><input name="itemName" required defaultValue={order?.itemName ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label="Quantity"><input name="quantity" required type="number" min="1" defaultValue={order?.quantity ?? 1} className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label="Amazon account">
+        <select name="amazonAccountId" defaultValue={order?.amazonAccountId ?? ""} className="w-full px-3 py-2 text-sm">
+          <option value="">Select account</option>
+          {accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Buy group / destination">
+        <select name="buyGroupId" defaultValue={order?.buyGroupId ?? ""} className="w-full px-3 py-2 text-sm">
+          <option value="">Select buy group / destination</option>
+          {buyGroups.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Retail price per unit"><input name="retailPrice" required type="number" min="0" step="0.01" defaultValue={order?.retailPrice ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label="Payout per unit"><input name="payoutPerUnit" required type="number" min="0" step="0.01" defaultValue={order?.payoutPerUnit ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label="Order number"><input name="orderNumber" defaultValue={order?.orderNumber ?? ""} placeholder="Ex: 114-3361283-3021808" inputMode="numeric" maxLength={19} pattern="\d{3}-\d{7}-\d{7}" title="Use the format 114-3361283-3021808" onInput={(event) => { event.currentTarget.value = formatAmazonOrderNumber(event.currentTarget.value); }} className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label="Tracking number"><input name="trackingNumber" defaultValue={order?.trackingNumber ?? ""} placeholder="Ex: TBA330706322941" onInput={(event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase(); }} className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label="Chase cashback">
+        <select name="chaseCashbackPercent" defaultValue={order?.chaseCashbackPercent ?? 5} className="w-full px-3 py-2 text-sm">
+          {[0, 5, 6, 7].map((value) => <option key={value} value={value}>{value}%</option>)}
+          <option value="custom">Custom</option>
+        </select>
+      </Field>
+      <Field label="Custom Chase %"><input name="customChaseCashbackPercent" type="number" min="0" step="0.01" placeholder="Only if custom" className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label="Shipping type"><input name="shippingType" defaultValue={order?.shippingType ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+      <div className="grid gap-3 md:col-span-2 md:grid-cols-2">
+        <CheckField name="youngAdultEligible" label="Young Adult extra 5%" defaultChecked={order?.youngAdultEligible ?? false} />
+        <CheckField name="sameTracking" label="Same tracking" defaultChecked={order?.sameTracking ?? false} />
+      </div>
+      <Field label="Notes" wide><textarea name="notes" defaultValue={order?.notes ?? ""} rows={3} className="w-full resize-none px-3 py-2 text-sm" /></Field>
+    </div>
+  );
+}
+
+function AccountsView({ accounts, orders }: { accounts: AmazonAccount[]; orders: OrderWithRelations[]; setSelectedOrder: (order: OrderWithRelations) => void }) {
+  return (
+    <div className="space-y-4">
+      <form action={createAmazonAccount} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+        <div className="mb-3 flex items-center gap-2">
+          <Plus size={17} className="text-blue-300" />
+          <h2 className="font-semibold">Add Amazon Account</h2>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[1fr_180px_auto]">
+          <input name="name" required placeholder="Account name" className="w-full px-3 py-2 text-sm" />
+          <input name="defaultCreditCardDueDays" type="number" min="1" defaultValue={7} className="w-full px-3 py-2 text-sm" aria-label="Default credit card due days" />
+          <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Add Account</button>
+        </div>
+      </form>
+      <SummaryGrid>
+        {accounts.map((account) => {
+          const accountOrders = orders.filter((order) => order.amazonAccountId === account.id);
+          const summary = summarize(accountOrders);
+          return (
+            <div key={account.id} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="font-semibold">{account.name}</h2>
+                <CreditCard size={17} className="text-muted" />
+              </div>
+              <SummaryFacts summary={summary} />
+              <form action={setAccountDefaultDueDays} className="mt-4 flex items-center gap-2">
+                <input type="hidden" name="id" value={account.id} />
+                <input name="defaultCreditCardDueDays" type="number" min="1" defaultValue={account.defaultCreditCardDueDays ?? 7} className="w-20 px-2 py-1.5 text-sm" />
+                <button className="rounded-md border border-line px-2 py-1.5 text-xs text-muted hover:text-white">Set card due days</button>
+              </form>
+            </div>
+          );
+        })}
+      </SummaryGrid>
+    </div>
+  );
+}
+
+function BuyGroupsView({ buyGroups, orders }: { buyGroups: BuyGroup[]; orders: OrderWithRelations[] }) {
+  return (
+    <div className="space-y-4">
+      <form action={createBuyGroup} className="rounded-lg border border-blue-400/20 bg-panel/80 p-4 shadow-glow">
+        <div className="mb-3 flex items-center gap-2">
+          <Plus size={17} className="text-blue-300" />
+          <h2 className="font-semibold">Add Buy Group / Destination</h2>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+          <input name="name" required placeholder="Buy group / destination name" className="w-full px-3 py-2 text-sm" />
+          <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Add</button>
+        </div>
+      </form>
+      <SummaryGrid>
+        {buyGroups.map((group) => {
+          const groupOrders = orders.filter((order) => order.buyGroupId === group.id);
+          const summary = summarize(groupOrders);
+          return (
+            <div key={group.id} className="rounded-lg border border-blue-400/20 bg-panel/80 p-4 shadow-glow">
+              <h2 className="mb-3 font-semibold">{group.name}</h2>
+              <SummaryFacts summary={summary} />
+              <Fact label="Delivered unpaid" value={String(groupOrders.filter((order) => order.delivered && !order.paidOut).length)} />
+              <Fact label="Avg payout time" value={averageDays(groupOrders, "deliveredAt", "paidOutAt")} />
+            </div>
+          );
+        })}
+      </SummaryGrid>
+    </div>
+  );
+}
+
+function WarehousesView({ warehouses, orders }: { warehouses: Warehouse[]; orders: OrderWithRelations[] }) {
+  return (
+    <SummaryGrid>
+      {warehouses.map((warehouse) => {
+        const warehouseOrders = orders.filter((order) => order.warehouseId === warehouse.id);
+        return (
+          <div key={warehouse.id} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+            <h2 className="mb-3 font-semibold">{warehouse.name}</h2>
+            <Fact label="Total orders" value={String(warehouseOrders.length)} />
+            <Fact label="Pending delivery" value={String(warehouseOrders.filter((order) => !order.delivered).length)} />
+            <Fact label="Delivered" value={String(warehouseOrders.filter((order) => order.delivered).length)} />
+            <Fact label="Scanned" value={String(warehouseOrders.filter((order) => order.scanned).length)} />
+            <Fact label="Unpaid payout" value={String(warehouseOrders.filter((order) => order.scanned && !order.paidOut).length)} />
+          </div>
+        );
+      })}
+    </SummaryGrid>
+  );
+}
+
+function AnalyticsView({ orders }: { orders: OrderWithRelations[] }) {
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const groups = [
+    ["Realized profit by Amazon account", groupProfit(orders, (order) => order.amazonAccount?.name ?? "Missing account", "realized")],
+    ["Unrealized profit by Amazon account", groupProfit(orders, (order) => order.amazonAccount?.name ?? "Missing account", "unrealized")],
+    ["Realized profit by buy group", groupProfit(orders, (order) => order.buyGroup?.name ?? "Missing buy group", "realized")],
+    ["Unrealized profit by buy group", groupProfit(orders, (order) => order.buyGroup?.name ?? "Missing buy group", "unrealized")],
+    ["Realized profit by destination", groupProfit(orders, (order) => order.buyGroup?.name ?? order.warehouse?.name ?? "Missing destination", "realized")],
+    ["Unrealized profit by destination", groupProfit(orders, (order) => order.buyGroup?.name ?? order.warehouse?.name ?? "Missing destination", "unrealized")]
+  ];
+  const calendarDays = buildAnalyticsCalendar(orders, visibleMonth);
+  const profitSeries = buildProfitSeries(orders);
+  const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(visibleMonth);
+  const monthProfit = calendarDays.reduce((sum, day) => sum + day.realizedProfit, 0);
+  const monthEvents = calendarDays.reduce((sum, day) => sum + day.eventCount, 0);
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Operations Calendar</h2>
+            <div className="mt-1 text-sm text-muted">Ordered, delivered, scanned, paid out, card paid, and realized profit days.</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setVisibleMonth(addMonths(visibleMonth, -1))} className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Prev</button>
+            <button onClick={() => setVisibleMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1))} className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Today</button>
+            <button onClick={() => setVisibleMonth(addMonths(visibleMonth, 1))} className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Next</button>
+          </div>
+        </div>
+        <div className="mb-4 grid gap-3 md:grid-cols-3">
+          <div className="rounded-lg border border-line bg-surface/60 p-3">
+            <div className="text-xs uppercase tracking-[.12em] text-muted">Month</div>
+            <div className="mt-1 text-xl font-semibold">{monthLabel}</div>
+          </div>
+          <div className="rounded-lg border border-green-400/30 bg-green-500/10 p-3">
+            <div className="text-xs uppercase tracking-[.12em] text-muted">Realized Profit</div>
+            <div className="mt-1 text-xl font-semibold text-white">{money(monthProfit)}</div>
+          </div>
+          <div className="rounded-lg border border-blue-400/25 bg-blue-500/10 p-3">
+            <div className="text-xs uppercase tracking-[.12em] text-muted">Workflow Events</div>
+            <div className="mt-1 text-xl font-semibold text-white">{monthEvents}</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-7 gap-px overflow-hidden rounded-lg border border-line bg-line">
+          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+            <div key={day} className="bg-surface px-2 py-2 text-center text-xs font-semibold uppercase tracking-[.12em] text-muted">{day}</div>
+          ))}
+          {calendarDays.map((day) => (
+            <div key={day.key} className={cls("min-h-32 bg-surface/90 p-2", day.inMonth ? "" : "opacity-35", day.realizedProfit > 0 ? "bg-green-500/18" : day.eventCount > 0 ? "bg-blue-500/10" : "")}>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-semibold text-white">{day.date.getDate()}</span>
+                {day.realizedProfit > 0 && <span className="rounded-md bg-green-500/20 px-1.5 py-0.5 text-[11px] text-green-100">{money(day.realizedProfit)}</span>}
+              </div>
+              <div className="space-y-1 text-[11px] leading-tight text-slate-300">
+                {day.ordered > 0 && <div>Ordered: {day.ordered}</div>}
+                {day.delivered > 0 && <div>Delivered: {day.delivered}</div>}
+                {day.scanned > 0 && <div>Scanned: {day.scanned}</div>}
+                {day.paidOut > 0 && <div>Paid out: {day.paidOut}</div>}
+                {day.cardPaid > 0 && <div className="text-green-100">Card paid: {day.cardPaid}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <ProfitChart series={profitSeries} />
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        {groups.map(([title, rows]) => (
+          <div key={title as string} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+            <h2 className="mb-3 font-semibold">{title as string}</h2>
+            {(rows as Array<[string, number]>).map(([label, value]) => <Fact key={label} label={label} value={money(value)} />)}
+          </div>
+        ))}
+        <div className="rounded-lg border border-slate-500/30 bg-panel/80 p-4 shadow-glow">
+          <h2 className="mb-3 font-semibold">Cycle Times</h2>
+          <Fact label="Delivered to paid out" value={averageDays(orders, "deliveredAt", "paidOutAt")} />
+          <Fact label="Ordered to tracking submitted" value={averageDays(orders, "createdAt", "trackingSubmittedAt")} />
+          <Fact label="Paid out to credit paid" value={averageDays(orders, "paidOutAt", "creditCardPaidAt")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportExportView({ orders }: { orders: OrderWithRelations[] }) {
+  const csv = useMemo(() => {
+    const header = ["item", "quantity", "account", "buy_group_destination", "order_number", "tracking", "stage", "total_paid", "total_payout", "amount_owed", "estimated_profit", "profit_status"];
+    const rows = orders.map((order) => {
+      const financials = calculateFinancials(order);
+      return [order.itemName, order.quantity, order.amazonAccount?.name ?? "", order.buyGroup?.name ?? order.warehouse?.name ?? "", order.orderNumber ?? "", order.trackingNumber ?? "", order.currentStage, financials.totalPaid, financials.totalPayout, financials.amountOwed, financials.profit, order.creditCardPaid ? "realized" : "unrealized"];
+    });
+    return [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
+  }, [orders]);
+
+  return (
+    <div className="rounded-lg border border-cyan/20 bg-panel/80 p-5 shadow-glow">
+      <h2 className="mb-2 font-semibold">Import / Export</h2>
+      <p className="mb-4 text-sm text-muted">CSV import is intentionally parked for v1. Export is available for backups and review.</p>
+      <a href={`data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`} download="buy-group-orders.csv" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">
+        <Download size={16} />
+        Export All Orders
+      </a>
+    </div>
+  );
+}
+
+function dateKey(date: Date | string) {
+  const value = new Date(date);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
+function addMonths(date: Date, months: number) {
+  return new Date(date.getFullYear(), date.getMonth() + months, 1);
+}
+
+function buildAnalyticsCalendar(orders: OrderWithRelations[], visibleMonth: Date) {
+  const first = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+  const start = new Date(first);
+  start.setDate(first.getDate() - first.getDay());
+
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return {
+      key: dateKey(date),
+      date,
+      inMonth: date.getMonth() === visibleMonth.getMonth(),
+      ordered: 0,
+      delivered: 0,
+      scanned: 0,
+      paidOut: 0,
+      cardPaid: 0,
+      realizedProfit: 0,
+      eventCount: 0
+    };
+  });
+  const byKey = new Map(days.map((day) => [day.key, day]));
+
+  const bump = (date: Date | string | null, field: "ordered" | "delivered" | "scanned" | "paidOut" | "cardPaid", amount = 0) => {
+    if (!date) return;
+    const day = byKey.get(dateKey(date));
+    if (!day) return;
+    day[field] += 1;
+    day.eventCount += 1;
+    if (field === "cardPaid") day.realizedProfit += amount;
+  };
+
+  for (const order of orders) {
+    const financials = calculateFinancials(order);
+    bump(order.createdAt, "ordered");
+    bump(order.deliveredAt, "delivered");
+    bump(order.scannedAt, "scanned");
+    bump(order.paidOutAt, "paidOut");
+    if (order.creditCardPaid) bump(order.creditCardPaidAt, "cardPaid", financials.profit);
+  }
+
+  return days;
+}
+
+function buildProfitSeries(orders: OrderWithRelations[]) {
+  const daily = new Map<string, number>();
+  for (const order of orders) {
+    if (!order.creditCardPaid || !order.creditCardPaidAt) continue;
+    const key = dateKey(order.creditCardPaidAt);
+    daily.set(key, (daily.get(key) ?? 0) + calculateFinancials(order).profit);
+  }
+
+  const entries = Array.from(daily.entries()).sort(([a], [b]) => a.localeCompare(b));
+  let cumulative = 0;
+  return entries.map(([key, value]) => {
+    cumulative += value;
+    return { key, date: new Date(`${key}T00:00:00`), dailyProfit: value, cumulativeProfit: cumulative };
+  });
+}
+
+function ProfitChart({ series }: { series: ReturnType<typeof buildProfitSeries> }) {
+  const width = 900;
+  const height = 260;
+  const padding = 36;
+  const maxProfit = Math.max(1, ...series.map((point) => point.cumulativeProfit));
+  const points = series.map((point, index) => {
+    const x = series.length === 1 ? padding : padding + (index / (series.length - 1)) * (width - padding * 2);
+    const y = height - padding - (point.cumulativeProfit / maxProfit) * (height - padding * 2);
+    return { ...point, x, y };
+  });
+  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+
+  return (
+    <section className="rounded-lg border border-green-400/20 bg-panel/80 p-4 shadow-glow">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Realized Profit Curve</h2>
+          <div className="mt-1 text-sm text-muted">Cumulative realized profit by credit card paid date.</div>
+        </div>
+        <div className="text-right">
+          <div className="text-xs uppercase tracking-[.12em] text-muted">Total</div>
+          <div className="text-xl font-semibold text-green-100">{money(series.at(-1)?.cumulativeProfit ?? 0)}</div>
+        </div>
+      </div>
+      {series.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">No realized profit yet. Mark credit cards paid to populate this chart.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[720px] rounded-lg border border-line bg-surface/70">
+            {[0, 1, 2, 3].map((tick) => {
+              const y = padding + tick * ((height - padding * 2) / 3);
+              const value = maxProfit - tick * (maxProfit / 3);
+              return (
+                <g key={tick}>
+                  <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="rgba(148,163,184,.18)" />
+                  <text x={padding - 8} y={y + 4} textAnchor="end" className="fill-slate-400 text-[11px]">{money(value)}</text>
+                </g>
+              );
+            })}
+            <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="rgba(148,163,184,.35)" />
+            <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="rgba(148,163,184,.35)" />
+            <path d={path} fill="none" stroke="#3ddc84" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+            {points.map((point, index) => (
+              <g key={point.key}>
+                <circle cx={point.x} cy={point.y} r="5" fill="#3ddc84" stroke="#0b1220" strokeWidth="2" />
+                {(index === 0 || index === points.length - 1 || index % Math.ceil(points.length / 5) === 0) && (
+                  <text x={point.x} y={height - 12} textAnchor="middle" className="fill-slate-400 text-[11px]">{shortDate(point.date)}</text>
+                )}
+              </g>
+            ))}
+          </svg>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SettingsView() {
+  return (
+    <div className="rounded-lg border border-slate-500/30 bg-panel/80 p-5 shadow-glow">
+      <h2 className="mb-4 font-semibold">Notification Settings</h2>
+      {["In-app only", "Email", "Google Calendar", "n8n webhook"].map((label, index) => (
+        <label key={label} className="mb-3 flex items-center gap-3 rounded-lg border border-line bg-surface/60 px-3 py-3">
+          <input type="radio" name="notifications" defaultChecked={index === 0} />
+          <span>{label}</span>
+          {index > 0 && <span className="ml-auto text-xs text-muted">Placeholder</span>}
+        </label>
+      ))}
+      <div className="mt-4 rounded-lg border border-line bg-surface/60 p-4 text-sm text-muted">
+        Future credentials belong in `.env`: email API key, Google OAuth credentials, and webhook URLs. Missing integrations are skipped safely.
+      </div>
+    </div>
+  );
+}
+
+function Modal({ title, children, onClose, wide = false }: { title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 backdrop-blur">
+      <div className={cls("max-h-[92vh] w-full overflow-auto rounded-xl border border-line bg-panel p-5 shadow-glow", wide ? "max-w-6xl" : "max-w-3xl")}>
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button onClick={onClose} className="rounded-lg border border-line px-3 py-1.5 text-sm text-muted hover:text-white">Close</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children, wide }: { label: string; children: React.ReactNode; wide?: boolean }) {
+  return (
+    <label className={cls("block", wide && "md:col-span-2")}>
+      <span className="mb-1 block text-xs text-muted">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function CheckField({ name, label, defaultChecked }: { name: string; label: string; defaultChecked: boolean }) {
+  return (
+    <label className="flex items-center gap-3 rounded-lg border border-line bg-surface/60 px-3 py-2 text-sm">
+      <input name={name} type="checkbox" defaultChecked={defaultChecked} className="h-4 w-4" />
+      {label}
+    </label>
+  );
+}
+
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-line/70 py-2 text-sm last:border-0">
+      <span className="text-muted">{label}</span>
+      <span className="text-right font-medium">{value}</span>
+    </div>
+  );
+}
+
+function SummaryGrid({ children }: { children: React.ReactNode }) {
+  return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{children}</div>;
+}
+
+function SummaryFacts({ summary }: { summary: ReturnType<typeof summarize> }) {
+  return (
+    <>
+      <Fact label="Total orders" value={String(summary.totalOrders)} />
+      <Fact label="Open orders" value={String(summary.openOrders)} />
+      <Fact label="Total spent" value={money(summary.totalSpent)} />
+      <Fact label="Payout expected" value={money(summary.totalPayout)} />
+      <Fact label="Total cashback" value={money(summary.totalCashback)} />
+      <Fact label="Amount owed" value={money(summary.amountOwed)} />
+      <Fact label="Realized profit" value={money(summary.realizedProfit)} />
+      <Fact label="Unrealized profit" value={money(summary.unrealizedProfit)} />
+      <Fact label="Unpaid card amount" value={money(summary.unpaidCard)} />
+      <Fact label="Needs action" value={String(summary.needsAction)} />
+    </>
+  );
+}
+
+function summarize(orders: OrderWithRelations[]) {
+  return orders.reduce(
+    (acc, order) => {
+      const financials = calculateFinancials(order);
+      acc.totalOrders += 1;
+      if (!order.profitReceived) acc.openOrders += 1;
+      acc.totalSpent += financials.totalPaid;
+      acc.totalPayout += financials.totalPayout;
+      acc.totalCashback += financials.totalCashback;
+      acc.amountOwed += financials.amountOwed;
+      if (order.creditCardPaid) acc.realizedProfit += financials.profit;
+      if (!order.creditCardPaid && !order.profitReceived) acc.unrealizedProfit += financials.profit;
+      if (order.paidOut && !order.creditCardPaid) acc.unpaidCard += financials.amountOwed;
+      if ((order.trackingNumber && !order.trackingSubmitted) || (order.delivered && !order.paidOut) || (order.paidOut && !order.creditCardPaid)) acc.needsAction += 1;
+      return acc;
+    },
+    { totalOrders: 0, openOrders: 0, totalSpent: 0, totalPayout: 0, totalCashback: 0, amountOwed: 0, realizedProfit: 0, unrealizedProfit: 0, unpaidCard: 0, needsAction: 0 }
+  );
+}
+
+function groupProfit(orders: OrderWithRelations[], keyer: (order: OrderWithRelations) => string, mode: "realized" | "unrealized") {
+  const map = new Map<string, number>();
+  for (const order of orders) {
+    if (mode === "realized" && !order.creditCardPaid) continue;
+    if (mode === "unrealized" && (order.creditCardPaid || order.profitReceived)) continue;
+    map.set(keyer(order), (map.get(keyer(order)) ?? 0) + calculateFinancials(order).profit);
+  }
+  return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+}
+
+function averageDays(orders: OrderWithRelations[], startKey: keyof OrderWithRelations, endKey: keyof OrderWithRelations) {
+  const values = orders
+    .map((order) => {
+      const start = order[startKey];
+      const end = order[endKey];
+      if (!start || !end) return null;
+      return (new Date(end as Date).getTime() - new Date(start as Date).getTime()) / 86400000;
+    })
+    .filter((value): value is number => value !== null);
+
+  if (values.length === 0) return "Not enough data";
+  return `${(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)} days`;
+}

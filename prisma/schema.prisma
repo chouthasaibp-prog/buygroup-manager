@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum OrderStage {
+  ORDERED
+  TRACKING_READY
+  TRACKING_SUBMITTED
+  DELIVERED
+  SCANNED
+  PAID_OUT
+  CREDIT_PAID
+  PROFIT_RECEIVED
+}
+
+model AmazonAccount {
+  id                       String   @id @default(cuid())
+  name                     String   @unique
+  defaultCreditCardDueDays Int?
+  createdAt                DateTime @default(now())
+  orders                   Order[]
+}
+
+model BuyGroup {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  orders    Order[]
+}
+
+model Warehouse {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String   @unique
+  createdAt DateTime @default(now())
+  orders    Order[]
+}
+
+model Order {
+  id                      String         @id @default(cuid())
+  itemName                String
+  quantity                Int
+  retailPrice             Float
+  payoutPerUnit           Float
+  chaseCashbackPercent    Float          @default(0)
+  youngAdultEligible      Boolean        @default(false)
+  sameTracking            Boolean        @default(false)
+  shippingType            String?
+  orderNumber             String?
+  trackingNumber          String?
+  trackingSubmitted       Boolean        @default(false)
+  delivered               Boolean        @default(false)
+  scanned                 Boolean        @default(false)
+  paidOut                 Boolean        @default(false)
+  creditCardPaid          Boolean        @default(false)
+  profitReceived          Boolean        @default(false)
+  currentStage            OrderStage     @default(ORDERED)
+  notes                   String?
+  manualCreditCardDueDate DateTime?
+  payoutReminderSnoozedAt DateTime?
+  createdAt               DateTime       @default(now())
+  trackingAddedAt         DateTime?
+  trackingSubmittedAt     DateTime?
+  deliveredAt             DateTime?
+  scannedAt               DateTime?
+  paidOutAt               DateTime?
+  creditCardPaidAt        DateTime?
+  profitReceivedAt        DateTime?
+  updatedAt               DateTime       @updatedAt
+  amazonAccountId         String?
+  buyGroupId              String?
+  warehouseId             String?
+  amazonAccount           AmazonAccount? @relation(fields: [amazonAccountId], references: [id], onDelete: SetNull)
+  buyGroup                BuyGroup?      @relation(fields: [buyGroupId], references: [id], onDelete: SetNull)
+  warehouse               Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  @@index([currentStage])
+  @@index([amazonAccountId])
+  @@index([buyGroupId])
+  @@index([warehouseId])
+}
