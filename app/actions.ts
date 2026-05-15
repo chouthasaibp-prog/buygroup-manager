@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { deriveStage } from "@/lib/domain";
-import { requireUser } from "@/lib/supabase/server";
+import { calculateFinancials, deriveStage } from "@/lib/domain";
+import { requireWorkspaceActionContext } from "@/lib/workspace";
 
 const boolFromForm = (formData: FormData, key: string) => formData.get(key) === "on" || formData.get(key) === "true";
 const numberFromForm = (formData: FormData, key: string, fallback = 0) => Number(formData.get(key) || fallback);
@@ -33,43 +33,38 @@ const destinationCodeFor = (name: string) => {
   return compact || "DEST";
 };
 
-async function currentUserId() {
-  const user = await requireUser();
-  return user.id;
-}
-
-async function requireOwnedAmazonAccountId(userId: string, id: string | null) {
+async function requireWorkspaceAmazonAccountId(workspaceId: string, id: string | null) {
   if (!id) return null;
-  const account = await prisma.amazonAccount.findFirst({ where: { id, userId }, select: { id: true } });
+  const account = await prisma.amazonAccount.findFirst({ where: { id, workspaceId }, select: { id: true } });
   if (!account) throw new Error("Amazon account not found.");
   return account.id;
 }
 
-async function requireOwnedBuyGroupId(userId: string, id: string | null) {
+async function requireWorkspaceBuyGroupId(workspaceId: string, id: string | null) {
   if (!id) return null;
-  const buyGroup = await prisma.buyGroup.findFirst({ where: { id, userId }, select: { id: true } });
+  const buyGroup = await prisma.buyGroup.findFirst({ where: { id, workspaceId }, select: { id: true } });
   if (!buyGroup) throw new Error("Buy group not found.");
   return buyGroup.id;
 }
 
-async function destinationIdForBuyGroup(userId: string, buyGroupId: string | null) {
+async function destinationIdForBuyGroup(workspaceId: string, buyGroupId: string | null) {
   if (!buyGroupId) return null;
-  const buyGroup = await prisma.buyGroup.findFirst({ where: { id: buyGroupId, userId } });
+  const buyGroup = await prisma.buyGroup.findFirst({ where: { id: buyGroupId, workspaceId } });
   if (!buyGroup) return null;
   const code = destinationCodeFor(buyGroup.name);
-  const existingByName = await prisma.warehouse.findFirst({ where: { name: buyGroup.name, userId } });
+  const existingByName = await prisma.warehouse.findFirst({ where: { name: buyGroup.name, workspaceId } });
   if (existingByName) return existingByName.id;
 
   const warehouse = await prisma.warehouse.upsert({
-    where: { userId_code: { userId, code } },
+    where: { workspaceId_code: { workspaceId, code } },
     update: { name: buyGroup.name },
-    create: { userId, name: buyGroup.name, code }
+    create: { workspaceId, name: buyGroup.name, code }
   });
   return warehouse.id;
 }
 
-async function deriveStagePatch(userId: string, orderId: string) {
-  const order = await prisma.order.findFirstOrThrow({ where: { id: orderId, userId } });
+async function deriveStagePatch(workspaceId: string, orderId: string) {
+  const order = await prisma.order.findFirstOrThrow({ where: { id: orderId, workspaceId } });
   await prisma.order.update({
     where: { id: orderId },
     data: { currentStage: deriveStage(order) }
@@ -77,17 +72,21 @@ async function deriveStagePatch(userId: string, orderId: string) {
 }
 
 export async function createOrder(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const chaseValue = String(formData.get("chaseCashbackPercent") ?? "0");
   const chaseCashbackPercent = chaseValue === "custom" ? numberFromForm(formData, "customChaseCashbackPercent") : Number(chaseValue);
-  const buyGroupId = await requireOwnedBuyGroupId(userId, optionalString(formData, "buyGroupId"));
-  const destinationId = await destinationIdForBuyGroup(userId, buyGroupId);
+  const buyGroupId = await requireWorkspaceBuyGroupId(workspaceId, optionalString(formData, "buyGroupId"));
+  const destinationId = await destinationIdForBuyGroup(workspaceId, buyGroupId);
   const trackingNumber = optionalAmazonTrackingNumber(formData);
-  const amazonAccountId = await requireOwnedAmazonAccountId(userId, optionalString(formData, "amazonAccountId"));
+  const amazonAccountId = await requireWorkspaceAmazonAccountId(workspaceId, optionalString(formData, "amazonAccountId"));
 
   const order = await prisma.order.create({
     data: {
-      userId,
+      userId: context.profile.authUserId,
+      workspaceId,
+      submittedByProfileId: context.profile.id,
+      createdByProfileId: context.profile.id,
       itemName: String(formData.get("itemName") ?? "").trim() || "Untitled order",
       quantity: Math.max(1, numberFromForm(formData, "quantity", 1)),
       retailPrice: numberFromForm(formData, "retailPrice"),
@@ -106,14 +105,21 @@ export async function createOrder(formData: FormData) {
     }
   });
 
-  await deriveStagePatch(userId, order.id);
+  await deriveStagePatch(workspaceId, order.id);
   revalidatePath("/");
 }
 
 export async function updateOrder(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const id = String(formData.get("id"));
-  const existing = await prisma.order.findFirstOrThrow({ where: { id, userId } });
+  const existing = await prisma.order.findFirstOrThrow({
+    where: {
+      id,
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    }
+  });
   const trackingNumber = optionalAmazonTrackingNumber(formData);
   const trackingSubmitted = !!trackingNumber && boolFromForm(formData, "trackingSubmitted");
   const delivered = !!trackingNumber && boolFromForm(formData, "delivered");
@@ -123,9 +129,10 @@ export async function updateOrder(formData: FormData) {
   const profitReceived = creditCardPaid && boolFromForm(formData, "profitReceived");
   const chaseValue = String(formData.get("chaseCashbackPercent") ?? existing.chaseCashbackPercent);
   const chaseCashbackPercent = chaseValue === "custom" ? numberFromForm(formData, "customChaseCashbackPercent") : Number(chaseValue);
-  const buyGroupId = await requireOwnedBuyGroupId(userId, optionalString(formData, "buyGroupId"));
-  const destinationId = await destinationIdForBuyGroup(userId, buyGroupId);
-  const amazonAccountId = await requireOwnedAmazonAccountId(userId, optionalString(formData, "amazonAccountId"));
+  const buyGroupId = await requireWorkspaceBuyGroupId(workspaceId, optionalString(formData, "buyGroupId"));
+  const destinationId = await destinationIdForBuyGroup(workspaceId, buyGroupId);
+  const amazonAccountId = await requireWorkspaceAmazonAccountId(workspaceId, optionalString(formData, "amazonAccountId"));
+  const memberPayoutAmount = numberFromForm(formData, "memberPayoutAmount", existing.memberPayoutAmount ?? calculateFinancials(existing).amountOwed);
 
   await prisma.order.update({
     where: { id },
@@ -140,13 +147,20 @@ export async function updateOrder(formData: FormData) {
       shippingType: optionalString(formData, "shippingType"),
       orderNumber: optionalAmazonOrderNumber(formData),
       trackingNumber,
-      trackingSubmitted,
-      delivered,
-      scanned,
-      paidOut,
-      creditCardPaid,
-      profitReceived,
+      ...(context.isAdmin ? {
+        trackingSubmitted,
+        delivered,
+        scanned,
+        paidOut,
+        creditCardPaid,
+        profitReceived,
+        memberPaid: boolFromForm(formData, "memberPaid"),
+        memberPaidAt: boolFromForm(formData, "memberPaid") && !existing.memberPaid ? new Date() : existing.memberPaidAt,
+        memberPayoutAmount,
+        internalAdminNotes: optionalString(formData, "internalAdminNotes")
+      } : {}),
       notes: optionalString(formData, "notes"),
+      memberVisibleNotes: optionalString(formData, "memberVisibleNotes"),
       amazonAccountId,
       buyGroupId,
       warehouseId: destinationId,
@@ -154,24 +168,33 @@ export async function updateOrder(formData: FormData) {
         ? new Date(String(formData.get("manualCreditCardDueDate")))
         : null,
       trackingAddedAt: trackingNumber && !existing.trackingNumber ? new Date() : existing.trackingAddedAt,
-      trackingSubmittedAt: trackingSubmitted && !existing.trackingSubmitted ? new Date() : existing.trackingSubmittedAt,
-      deliveredAt: delivered && !existing.delivered ? new Date() : existing.deliveredAt,
-      scannedAt: scanned && !existing.scanned ? new Date() : existing.scannedAt,
-      paidOutAt: paidOut && !existing.paidOut ? new Date() : existing.paidOutAt,
-      creditCardPaidAt: creditCardPaid && !existing.creditCardPaid ? new Date() : existing.creditCardPaidAt,
-      profitReceivedAt: profitReceived && !existing.profitReceived ? new Date() : existing.profitReceivedAt
+      ...(context.isAdmin ? {
+        trackingSubmittedAt: trackingSubmitted && !existing.trackingSubmitted ? new Date() : existing.trackingSubmittedAt,
+        deliveredAt: delivered && !existing.delivered ? new Date() : existing.deliveredAt,
+        scannedAt: scanned && !existing.scanned ? new Date() : existing.scannedAt,
+        paidOutAt: paidOut && !existing.paidOut ? new Date() : existing.paidOutAt,
+        creditCardPaidAt: creditCardPaid && !existing.creditCardPaid ? new Date() : existing.creditCardPaidAt,
+        profitReceivedAt: profitReceived && !existing.profitReceived ? new Date() : existing.profitReceivedAt
+      } : {})
     }
   });
 
-  await deriveStagePatch(userId, id);
+  await deriveStagePatch(workspaceId, id);
   revalidatePath("/");
 }
 
 export async function addTracking(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const id = String(formData.get("id"));
   const trackingNumber = optionalAmazonTrackingNumber(formData);
-  const existing = await prisma.order.findFirstOrThrow({ where: { id, userId } });
+  const existing = await prisma.order.findFirstOrThrow({
+    where: {
+      id,
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    }
+  });
 
   await prisma.order.update({
     where: { id },
@@ -181,17 +204,29 @@ export async function addTracking(formData: FormData) {
     }
   });
 
-  await deriveStagePatch(userId, id);
+  await deriveStagePatch(workspaceId, id);
   revalidatePath("/");
 }
 
 export async function quickAction(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const id = String(formData.get("id"));
   const action = String(formData.get("action"));
-  const order = await prisma.order.findFirstOrThrow({ where: { id, userId } });
+  const order = await prisma.order.findFirstOrThrow({
+    where: {
+      id,
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    }
+  });
   const now = new Date();
   const data = {} as Record<string, unknown>;
+
+  const adminOnly = ["submitTracking", "delivered", "scanned", "paidOut", "cardPaid", "profitReceived", "snoozePayout", "memberPaid"];
+  if (adminOnly.includes(action) && !context.isAdmin) {
+    throw new Error("You do not have permission for this action.");
+  }
 
   if (action === "submitTracking" && order.trackingNumber) {
     data.trackingSubmitted = true;
@@ -223,6 +258,12 @@ export async function quickAction(formData: FormData) {
     data.profitReceivedAt = now;
   }
 
+  if (action === "memberPaid") {
+    data.memberPaid = true;
+    data.memberPaidAt = now;
+    data.memberPayoutAmount = order.memberPayoutAmount ?? calculateFinancials(order).amountOwed;
+  }
+
   if (action === "snoozePayout") {
     const days = numberFromForm(formData, "days", 1);
     const snoozedUntil = new Date();
@@ -232,16 +273,17 @@ export async function quickAction(formData: FormData) {
 
   if (Object.keys(data).length > 0) {
     await prisma.order.update({ where: { id }, data });
-    await deriveStagePatch(userId, id);
+    await deriveStagePatch(workspaceId, id);
   }
 
   revalidatePath("/");
 }
 
 export async function setAccountDefaultDueDays(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const id = String(formData.get("id"));
-  await prisma.amazonAccount.findFirstOrThrow({ where: { id, userId }, select: { id: true } });
+  await prisma.amazonAccount.findFirstOrThrow({ where: { id, workspaceId }, select: { id: true } });
   await prisma.amazonAccount.update({
     where: { id },
     data: { defaultCreditCardDueDays: numberFromForm(formData, "defaultCreditCardDueDays", 7) }
@@ -251,15 +293,17 @@ export async function setAccountDefaultDueDays(formData: FormData) {
 }
 
 export async function createAmazonAccount(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const name = optionalString(formData, "name");
   if (!name) return;
 
   await prisma.amazonAccount.upsert({
-    where: { userId_name: { userId, name } },
+    where: { workspaceId_name: { workspaceId, name } },
     update: {},
     create: {
-      userId,
+      userId: context.profile.authUserId,
+      workspaceId,
       name,
       defaultCreditCardDueDays: numberFromForm(formData, "defaultCreditCardDueDays", 7)
     }
@@ -269,47 +313,64 @@ export async function createAmazonAccount(formData: FormData) {
 }
 
 export async function createBuyGroup(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const name = optionalString(formData, "name");
   if (!name) return;
 
   await prisma.buyGroup.upsert({
-    where: { userId_name: { userId, name } },
+    where: { workspaceId_name: { workspaceId, name } },
     update: {},
-    create: { userId, name }
+    create: { userId: context.profile.authUserId, workspaceId, name }
   });
   const code = destinationCodeFor(name);
   await prisma.warehouse.upsert({
-    where: { userId_code: { userId, code } },
+    where: { workspaceId_code: { workspaceId, code } },
     update: { name },
-    create: { userId, name, code }
+    create: { userId: context.profile.authUserId, workspaceId, name, code }
   });
 
   revalidatePath("/");
 }
 
 export async function deleteOrder(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const id = String(formData.get("id"));
   if (!id) return;
 
-  await prisma.order.findFirstOrThrow({ where: { id, userId }, select: { id: true } });
+  await prisma.order.findFirstOrThrow({
+    where: {
+      id,
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    },
+    select: { id: true }
+  });
   await prisma.order.delete({ where: { id } });
   revalidatePath("/");
 }
 
 export async function setOrderBuyGroup(formData: FormData) {
-  const userId = await currentUserId();
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
   const id = String(formData.get("id"));
-  const buyGroupId = await requireOwnedBuyGroupId(userId, optionalString(formData, "buyGroupId"));
+  const buyGroupId = await requireWorkspaceBuyGroupId(workspaceId, optionalString(formData, "buyGroupId"));
   if (!id || !buyGroupId) return;
-  await prisma.order.findFirstOrThrow({ where: { id, userId }, select: { id: true } });
+  await prisma.order.findFirstOrThrow({
+    where: {
+      id,
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    },
+    select: { id: true }
+  });
 
   await prisma.order.update({
     where: { id },
     data: {
       buyGroupId,
-      warehouseId: await destinationIdForBuyGroup(userId, buyGroupId)
+      warehouseId: await destinationIdForBuyGroup(workspaceId, buyGroupId)
     }
   });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AmazonAccount, BuyGroup, OrderStage, Warehouse } from "@prisma/client";
+import type { AmazonAccount, BuyGroup, OrderStage, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
 import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
 import { addTracking, createAmazonAccount, createBuyGroup, createOrder, deleteOrder, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
@@ -24,6 +24,18 @@ type Props = {
     unrealizedProfit: number;
   };
   userEmail: string;
+  profileId: string;
+  isAdmin: boolean;
+  activeWorkspace: WorkspaceSwitcherItem;
+  workspaces: WorkspaceSwitcherItem[];
+};
+
+type WorkspaceSwitcherItem = {
+  id: string;
+  name: string;
+  type: WorkspaceType;
+  role: WorkspaceRole;
+  inviteCode: string;
 };
 
 const nav = [
@@ -33,6 +45,26 @@ const nav = [
   { key: "buyGroups", label: "Buy Groups", icon: Landmark },
   { key: "analytics", label: "Analytics", icon: Bell },
   { key: "importExport", label: "Import / Export", icon: Upload },
+  { key: "settings", label: "Settings", icon: Settings }
+] as const;
+
+const personalNav = nav.filter((item) => item.key !== "importExport");
+const operatorAdminNav = [
+  { key: "dashboard", label: "Admin Dashboard", icon: LayoutDashboard },
+  { key: "orders", label: "Orders", icon: Package },
+  { key: "queues", label: "Queues", icon: Inbox },
+  { key: "members", label: "Members", icon: Home },
+  { key: "memberPayouts", label: "Member Payouts", icon: CreditCard },
+  { key: "buyGroups", label: "Buy Groups", icon: Landmark },
+  { key: "warehouses", label: "Warehouses", icon: Inbox },
+  { key: "analytics", label: "Analytics", icon: Bell },
+  { key: "settings", label: "Settings", icon: Settings }
+] as const;
+const operatorMemberNav = [
+  { key: "dashboard", label: "My Dashboard", icon: LayoutDashboard },
+  { key: "orders", label: "My Orders", icon: Package },
+  { key: "trackingNeeded", label: "Tracking Needed", icon: Upload },
+  { key: "myPayouts", label: "My Payouts", icon: CreditCard },
   { key: "settings", label: "Settings", icon: Settings }
 ] as const;
 
@@ -82,8 +114,9 @@ function reminderTone(severity: Reminder["severity"]) {
   return "border-slate-500/40 bg-slate-500/10";
 }
 
-export default function CommandCenter({ orders, accounts, buyGroups, reminders, totals, userEmail }: Props) {
-  const [section, setSection] = useState<(typeof nav)[number]["key"]>("dashboard");
+export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, totals, userEmail, activeWorkspace, workspaces, profileId, isAdmin }: Props) {
+  const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
+  const [section, setSection] = useState<string>("dashboard");
   const [stage, setStage] = useState<OrderStage | "ALL">("ORDERED");
   const [query, setQuery] = useState("");
   const [accountFilter, setAccountFilter] = useState("ALL");
@@ -127,7 +160,21 @@ export default function CommandCenter({ orders, accounts, buyGroups, reminders, 
           </div>
         </div>
         <nav className="space-y-1">
-          {nav.map((item) => {
+          <select
+            value={activeWorkspace.id}
+            onChange={(event) => {
+              window.location.href = `/?workspace=${event.target.value}`;
+            }}
+            className="mb-4 w-full px-3 py-2 text-sm"
+            aria-label="Workspace"
+          >
+            {workspaces.map((workspace) => (
+              <option key={workspace.id} value={workspace.id}>
+                {workspace.type === "PERSONAL" ? "Personal" : workspace.name} · {workspace.role}
+              </option>
+            ))}
+          </select>
+          {workspaceNav.map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -149,7 +196,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, reminders, 
       <section className="min-h-screen bg-surface/35 lg:pl-64">
         <header className="sticky top-0 z-20 flex items-center justify-between border-b border-cyan/20 bg-surface/80 px-4 py-3 shadow-[0_12px_40px_rgba(0,0,0,.22)] backdrop-blur-xl md:px-7">
           <div>
-            <div className="text-xs uppercase tracking-[.18em] text-cyan/80">Today</div>
+            <div className="text-xs uppercase tracking-[.18em] text-cyan/80">{activeWorkspace.type === "PERSONAL" ? "Personal Mode" : `${activeWorkspace.role} Mode`}</div>
             <h1 className="text-xl font-semibold text-white">What needs action?</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -167,7 +214,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, reminders, 
         </header>
 
         <div className="px-4 py-5 md:px-7">
-          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} />}
+          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} isAdmin={isAdmin} />}
           {section === "orders" && (
             <OrdersView
               orders={filteredOrders}
@@ -185,28 +232,36 @@ export default function CommandCenter({ orders, accounts, buyGroups, reminders, 
               setSelectedOrder={setSelectedOrder}
             />
           )}
-          {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} />}
-          {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} />}
+          {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} />}
+          {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} />}
+          {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
+          {section === "queues" && <OperatorQueues orders={orders} setStage={setStage} setSection={setSection} />}
+          {section === "members" && <MembersView activeWorkspace={activeWorkspace} orders={orders} />}
+          {section === "memberPayouts" && <MemberPayoutsView orders={orders} activeWorkspace={activeWorkspace} />}
+          {section === "trackingNeeded" && <TrackingNeededView orders={orders} />}
+          {section === "myPayouts" && <MyPayoutsView orders={orders} />}
           {section === "analytics" && <AnalyticsView orders={orders} />}
           {section === "importExport" && <ImportExportView orders={orders} />}
           {section === "settings" && <SettingsView />}
         </div>
       </section>
 
-      {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} onClose={() => setNewOrderOpen(false)} />}
-      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} onClose={() => setSelectedOrder(null)} />}
+      {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} onClose={() => setNewOrderOpen(false)} />}
+      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} isAdmin={isAdmin} onClose={() => setSelectedOrder(null)} />}
     </main>
   );
 }
 
-function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage, setSelectedOrder }: {
+function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage, setSelectedOrder, activeWorkspace, isAdmin }: {
   orders: OrderWithRelations[];
   buyGroups: BuyGroup[];
   reminders: Reminder[];
   totals: Props["totals"];
-  setSection: (value: "orders") => void;
+  setSection: (value: string) => void;
   setStage: (value: OrderStage | "ALL") => void;
   setSelectedOrder: (order: OrderWithRelations) => void;
+  activeWorkspace: WorkspaceSwitcherItem;
+  isAdmin: boolean;
 }) {
   const metrics = [
     { label: "Open Orders", value: totals.openOrders.toString(), featured: true },
@@ -243,7 +298,7 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
         </div>
         <div className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">Active Workflow Queues</h2>
+            <h2 className="font-semibold">{activeWorkspace.type === "OPERATOR" && isAdmin ? "Operator Workflow Queues" : "Active Workflow Queues"}</h2>
             <button onClick={() => setSection("orders")} className="text-sm text-blue-300">Open orders</button>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
@@ -307,6 +362,7 @@ function ReminderAction({ reminder, buyGroups }: { reminder: Reminder; buyGroups
     return (
       <form action={setOrderBuyGroup} className="mt-3 flex items-center gap-2">
         <input type="hidden" name="id" value={reminder.order.id} />
+        <input type="hidden" name="workspaceId" value={reminder.order.workspaceId ?? ""} />
         <select name="buyGroupId" required defaultValue="" className="min-w-0 flex-1 px-2.5 py-1.5 text-xs">
           <option value="">Set buy group</option>
           {buyGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
@@ -327,6 +383,7 @@ function ReminderAction({ reminder, buyGroups }: { reminder: Reminder; buyGroups
   return (
     <form action={quickAction} className="mt-3 flex items-center gap-2">
       <input type="hidden" name="id" value={reminder.order.id} />
+      <input type="hidden" name="workspaceId" value={reminder.order.workspaceId ?? ""} />
       <input type="hidden" name="action" value={action} />
       <button className="rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium hover:bg-white/20">{reminder.action}</button>
     </form>
@@ -482,6 +539,7 @@ function StageActions({ order, onOpen }: { order: OrderWithRelations; onOpen: ()
     return (
       <form action={addTracking} className="flex min-w-72 items-center gap-2">
         <input type="hidden" name="id" value={order.id} />
+        <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
         <input name="trackingNumber" placeholder="Ex: TBA330706322941" onInput={(event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase(); }} className="min-w-0 flex-1 px-3 py-2 text-sm" />
         <button className="rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon">Add Tracking</button>
       </form>
@@ -506,6 +564,7 @@ function StageActions({ order, onOpen }: { order: OrderWithRelations; onOpen: ()
       {action && (
         <form action={quickAction}>
           <input type="hidden" name="id" value={order.id} />
+          <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
           <input type="hidden" name="action" value={action} />
           <button className="rounded-lg border border-green-400/40 bg-green-500/15 px-3 py-2 text-sm font-medium text-green-100 shadow-neon">{actionLabels[action]}</button>
         </form>
@@ -513,6 +572,7 @@ function StageActions({ order, onOpen }: { order: OrderWithRelations; onOpen: ()
       {order.currentStage === "DELIVERED" && (
         <form action={quickAction}>
           <input type="hidden" name="id" value={order.id} />
+          <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
           <input type="hidden" name="action" value="snoozePayout" />
           <input type="hidden" name="days" value="3" />
           <button className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Snooze</button>
@@ -523,10 +583,11 @@ function StageActions({ order, onOpen }: { order: OrderWithRelations; onOpen: ()
   );
 }
 
-function NewOrderModal({ accounts, buyGroups, onClose }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; onClose: () => void }) {
+function NewOrderModal({ accounts, buyGroups, workspaceId, onClose }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; onClose: () => void }) {
   return (
     <Modal title="New Order" onClose={onClose}>
       <form action={createOrder} className="grid gap-4" onSubmit={() => setTimeout(onClose, 100)}>
+        <input type="hidden" name="workspaceId" value={workspaceId} />
         <OrderFields accounts={accounts} buyGroups={buyGroups} />
         <div className="flex justify-end gap-2 border-t border-line pt-4">
           <button type="button" onClick={onClose} className="rounded-lg border border-line px-3 py-2 text-sm text-muted">Cancel</button>
@@ -537,7 +598,7 @@ function NewOrderModal({ accounts, buyGroups, onClose }: { accounts: AmazonAccou
   );
 }
 
-function OrderPanel({ order, accounts, buyGroups, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; onClose: () => void }) {
+function OrderPanel({ order, accounts, buyGroups, workspaceId, isAdmin, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; isAdmin: boolean; onClose: () => void }) {
   const financials = calculateFinancials(order);
   const timeline = [
     ["Created", order.createdAt],
@@ -556,15 +617,19 @@ function OrderPanel({ order, accounts, buyGroups, onClose }: { order: OrderWithR
       <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
         <form action={updateOrder} className="grid gap-4" onSubmit={() => setTimeout(onClose, 100)}>
           <input type="hidden" name="id" value={order.id} />
+          <input type="hidden" name="workspaceId" value={workspaceId} />
           <OrderFields accounts={accounts} buyGroups={buyGroups} order={order} />
-          <div className="grid gap-3 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-2">
-            <CheckField name="trackingSubmitted" label="Tracking submitted" defaultChecked={order.trackingSubmitted} />
-            <CheckField name="delivered" label="Delivered" defaultChecked={order.delivered} />
-            <CheckField name="scanned" label="Scanned" defaultChecked={order.scanned} />
-            <CheckField name="paidOut" label="Paid out by buy group" defaultChecked={order.paidOut} />
-            <CheckField name="creditCardPaid" label="Credit card paid" defaultChecked={order.creditCardPaid} />
-            <CheckField name="profitReceived" label="Profit received" defaultChecked={order.profitReceived} />
-          </div>
+          {isAdmin && (
+            <div className="grid gap-3 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-2">
+              <CheckField name="trackingSubmitted" label="Tracking submitted" defaultChecked={order.trackingSubmitted} />
+              <CheckField name="delivered" label="Delivered" defaultChecked={order.delivered} />
+              <CheckField name="scanned" label="Scanned" defaultChecked={order.scanned} />
+              <CheckField name="paidOut" label="Paid out by buy group" defaultChecked={order.paidOut} />
+              <CheckField name="creditCardPaid" label="Credit card paid" defaultChecked={order.creditCardPaid} />
+              <CheckField name="profitReceived" label="Profit received" defaultChecked={order.profitReceived} />
+              <CheckField name="memberPaid" label="Member paid" defaultChecked={order.memberPaid} />
+            </div>
+          )}
           <div>
             <label className="mb-1 block text-xs text-muted">Manual credit card due date</label>
             <input name="manualCreditCardDueDate" type="date" defaultValue={order.manualCreditCardDueDate ? new Date(order.manualCreditCardDueDate).toISOString().slice(0, 10) : ""} className="w-full px-3 py-2 text-sm" />
@@ -604,6 +669,7 @@ function OrderPanel({ order, accounts, buyGroups, onClose }: { order: OrderWithR
             className="rounded-lg border border-slate-400/30 bg-slate-500/10 p-4"
           >
             <input type="hidden" name="id" value={order.id} />
+            <input type="hidden" name="workspaceId" value={workspaceId} />
             <div className="mb-2 text-sm font-semibold text-white">Delete Entry</div>
             <p className="mb-3 text-sm text-slate-300">Remove this order from the local database.</p>
             <button className="rounded-lg border border-slate-300/40 px-3 py-2 text-sm font-medium text-white hover:bg-white/10">Delete Order</button>
@@ -652,10 +718,11 @@ function OrderFields({ accounts, buyGroups, order }: { accounts: AmazonAccount[]
   );
 }
 
-function AccountsView({ accounts, orders }: { accounts: AmazonAccount[]; orders: OrderWithRelations[]; setSelectedOrder: (order: OrderWithRelations) => void }) {
+function AccountsView({ accounts, orders, workspaceId }: { accounts: AmazonAccount[]; orders: OrderWithRelations[]; setSelectedOrder: (order: OrderWithRelations) => void; workspaceId: string }) {
   return (
     <div className="space-y-4">
       <form action={createAmazonAccount} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+        <input type="hidden" name="workspaceId" value={workspaceId} />
         <div className="mb-3 flex items-center gap-2">
           <Plus size={17} className="text-blue-300" />
           <h2 className="font-semibold">Add Amazon Account</h2>
@@ -679,6 +746,7 @@ function AccountsView({ accounts, orders }: { accounts: AmazonAccount[]; orders:
               <SummaryFacts summary={summary} />
               <form action={setAccountDefaultDueDays} className="mt-4 flex items-center gap-2">
                 <input type="hidden" name="id" value={account.id} />
+                <input type="hidden" name="workspaceId" value={workspaceId} />
                 <input name="defaultCreditCardDueDays" type="number" min="1" defaultValue={account.defaultCreditCardDueDays ?? 7} className="w-20 px-2 py-1.5 text-sm" />
                 <button className="rounded-md border border-line px-2 py-1.5 text-xs text-muted hover:text-white">Set card due days</button>
               </form>
@@ -690,10 +758,11 @@ function AccountsView({ accounts, orders }: { accounts: AmazonAccount[]; orders:
   );
 }
 
-function BuyGroupsView({ buyGroups, orders }: { buyGroups: BuyGroup[]; orders: OrderWithRelations[] }) {
+function BuyGroupsView({ buyGroups, orders, workspaceId }: { buyGroups: BuyGroup[]; orders: OrderWithRelations[]; workspaceId: string }) {
   return (
     <div className="space-y-4">
       <form action={createBuyGroup} className="rounded-lg border border-blue-400/20 bg-panel/80 p-4 shadow-glow">
+        <input type="hidden" name="workspaceId" value={workspaceId} />
         <div className="mb-3 flex items-center gap-2">
           <Plus size={17} className="text-blue-300" />
           <h2 className="font-semibold">Add Buy Group / Destination</h2>
@@ -739,6 +808,142 @@ function WarehousesView({ warehouses, orders }: { warehouses: Warehouse[]; order
       })}
     </SummaryGrid>
   );
+}
+
+function OperatorQueues({ orders, setStage, setSection }: { orders: OrderWithRelations[]; setStage: (value: OrderStage | "ALL") => void; setSection: (value: string) => void }) {
+  const queues = [
+    ["New Member Orders", orders.filter((order) => order.currentStage === "ORDERED" && !order.trackingNumber)],
+    ["Needs Tracking From Member", orders.filter((order) => !order.trackingNumber)],
+    ["Tracking Ready To Submit", orders.filter((order) => order.currentStage === "TRACKING_READY")],
+    ["Tracking Submitted", orders.filter((order) => order.currentStage === "TRACKING_SUBMITTED")],
+    ["Delivered Not Paid", orders.filter((order) => order.delivered && !order.paidOut)],
+    ["Scanned Not Paid", orders.filter((order) => order.scanned && !order.paidOut)],
+    ["Buy Group Paid Out", orders.filter((order) => order.paidOut && !order.memberPaid)],
+    ["Members To Pay", orders.filter((order) => !order.memberPaid && (order.memberPayoutAmount ?? calculateFinancials(order).amountOwed) > 0)],
+    ["Completed", orders.filter((order) => order.memberPaid || order.profitReceived)]
+  ] as const;
+
+  return (
+    <SummaryGrid>
+      {queues.map(([label, items]) => (
+        <button
+          key={label}
+          onClick={() => {
+            if (label.includes("Tracking Ready")) setStage("TRACKING_READY");
+            else if (label.includes("Submitted")) setStage("TRACKING_SUBMITTED");
+            else if (label.includes("Completed")) setStage("PROFIT_RECEIVED");
+            else setStage("ALL");
+            setSection("orders");
+          }}
+          className="rounded-lg border border-cyan/20 bg-panel/80 p-4 text-left shadow-glow hover:shadow-neon"
+        >
+          <div className="text-sm font-semibold text-white">{label}</div>
+          <div className="mt-3 text-3xl font-semibold text-cyan">{items.length}</div>
+        </button>
+      ))}
+    </SummaryGrid>
+  );
+}
+
+function MembersView({ activeWorkspace, orders }: { activeWorkspace: WorkspaceSwitcherItem; orders: OrderWithRelations[] }) {
+  const members = groupOrdersByMember(orders);
+  return (
+    <div className="space-y-4">
+      <section className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+        <h2 className="font-semibold">Invite Members</h2>
+        <div className="mt-3 grid gap-2 md:grid-cols-[1fr_auto]">
+          <input readOnly value={activeWorkspace.inviteCode} className="w-full px-3 py-2 text-sm" aria-label="Invite code" />
+          <button type="button" onClick={() => navigator.clipboard?.writeText(activeWorkspace.inviteCode)} className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Copy Invite Code</button>
+        </div>
+      </section>
+      <SummaryGrid>
+        {members.map((member) => (
+          <div key={member.id} className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
+            <h2 className="font-semibold">{member.name}</h2>
+            <Fact label="Orders" value={String(member.orders.length)} />
+            <Fact label="Unpaid owed" value={money(member.unpaid)} />
+            <Fact label="Paid" value={money(member.paid)} />
+          </div>
+        ))}
+        {members.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-muted">No member-submitted orders yet.</div>}
+      </SummaryGrid>
+    </div>
+  );
+}
+
+function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWorkspace: WorkspaceSwitcherItem }) {
+  const members = groupOrdersByMember(orders);
+  return (
+    <div className="space-y-4">
+      {members.map((member) => (
+        <div key={member.id} className="rounded-lg border border-green-400/20 bg-panel/80 p-4 shadow-glow">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="font-semibold">{member.name}</h2>
+            <div className="text-right text-sm text-muted">Unpaid <span className="font-semibold text-white">{money(member.unpaid)}</span></div>
+          </div>
+          <div className="space-y-2">
+            {member.orders.filter((order) => !order.memberPaid).map((order) => (
+              <form key={order.id} action={quickAction} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface/60 px-3 py-2">
+                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                <input type="hidden" name="id" value={order.id} />
+                <input type="hidden" name="action" value="memberPaid" />
+                <span className="text-sm">{order.itemName}</span>
+                <span className="text-sm text-muted">{money(order.memberPayoutAmount ?? calculateFinancials(order).amountOwed)}</span>
+                <button className="rounded-md border border-green-400/40 px-2.5 py-1.5 text-xs text-green-100">Mark Paid</button>
+              </form>
+            ))}
+          </div>
+        </div>
+      ))}
+      {members.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-muted">No member payouts yet.</div>}
+    </div>
+  );
+}
+
+function TrackingNeededView({ orders }: { orders: OrderWithRelations[] }) {
+  const trackingNeeded = orders.filter((order) => !order.trackingNumber);
+  return (
+    <div className="space-y-3">
+      {trackingNeeded.map((order) => <OrderQueueCard key={order.id} order={order} stage="ALL" onOpen={() => undefined} />)}
+      {trackingNeeded.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">No orders need tracking.</div>}
+    </div>
+  );
+}
+
+function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
+  const unpaid = orders.filter((order) => !order.memberPaid);
+  const paid = orders.filter((order) => order.memberPaid);
+  return (
+    <div className="grid gap-4 md:grid-cols-3">
+      <div className="rounded-lg border border-green-400/20 bg-panel/80 p-4 shadow-glow">
+        <div className="text-xs uppercase tracking-[.12em] text-muted">Amount Owed To Me</div>
+        <div className="mt-2 text-3xl font-semibold">{money(unpaid.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculateFinancials(order).amountOwed), 0))}</div>
+      </div>
+      <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
+        <div className="text-xs uppercase tracking-[.12em] text-muted">Paid Orders</div>
+        <div className="mt-2 text-3xl font-semibold">{paid.length}</div>
+      </div>
+      <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
+        <div className="text-xs uppercase tracking-[.12em] text-muted">Open Orders</div>
+        <div className="mt-2 text-3xl font-semibold">{unpaid.length}</div>
+      </div>
+    </div>
+  );
+}
+
+function groupOrdersByMember(orders: OrderWithRelations[]) {
+  const map = new Map<string, { id: string; name: string; orders: OrderWithRelations[]; unpaid: number; paid: number }>();
+  for (const order of orders) {
+    const id = order.submittedBy?.id ?? "unknown";
+    const name = order.submittedBy?.name ?? order.submittedBy?.email ?? "Unknown member";
+    const existing = map.get(id) ?? { id, name, orders: [], unpaid: 0, paid: 0 };
+    const amount = order.memberPayoutAmount ?? calculateFinancials(order).amountOwed;
+    existing.orders.push(order);
+    if (order.memberPaid) existing.paid += amount;
+    else existing.unpaid += amount;
+    map.set(id, existing);
+  }
+  return Array.from(map.values()).sort((a, b) => b.unpaid - a.unpaid);
 }
 
 function AnalyticsView({ orders }: { orders: OrderWithRelations[] }) {

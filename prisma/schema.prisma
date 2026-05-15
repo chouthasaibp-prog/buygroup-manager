@@ -19,82 +19,184 @@ enum OrderStage {
   PROFIT_RECEIVED
 }
 
+enum WorkspaceType {
+  PERSONAL
+  OPERATOR
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum WorkspaceMemberStatus {
+  ACTIVE
+  PENDING
+  SUSPENDED
+}
+
+model Profile {
+  id                     String            @id @default(cuid())
+  authUserId             String            @unique
+  name                   String?
+  email                  String
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  ownedWorkspaces        Workspace[]       @relation("WorkspaceOwner")
+  memberships            WorkspaceMember[]
+  createdOrders          Order[]           @relation("OrderCreatedBy")
+  submittedOrders        Order[]           @relation("OrderSubmittedBy")
+  assignedOperatorOrders Order[]           @relation("OrderAssignedOperator")
+
+  @@index([email])
+}
+
+model Workspace {
+  id             String            @id @default(cuid())
+  name           String
+  type           WorkspaceType
+  ownerProfileId String
+  inviteCode     String            @unique
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  owner          Profile           @relation("WorkspaceOwner", fields: [ownerProfileId], references: [id], onDelete: Cascade)
+  members        WorkspaceMember[]
+  accounts       AmazonAccount[]
+  buyGroups      BuyGroup[]
+  warehouses     Warehouse[]
+  orders         Order[]
+
+  @@index([ownerProfileId])
+  @@index([type])
+}
+
+model WorkspaceMember {
+  id          String                @id @default(cuid())
+  workspaceId String
+  profileId   String
+  role        WorkspaceRole
+  status      WorkspaceMemberStatus @default(ACTIVE)
+  joinedAt    DateTime?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  profile     Profile               @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, profileId])
+  @@index([profileId])
+  @@index([workspaceId, role])
+  @@index([workspaceId, status])
+}
+
 model AmazonAccount {
-  id                       String   @id @default(cuid())
+  id                       String     @id @default(cuid())
   userId                   String?
+  workspaceId              String?
   name                     String
   defaultCreditCardDueDays Int?
-  createdAt                DateTime @default(now())
+  createdAt                DateTime   @default(now())
+  workspace                Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   orders                   Order[]
 
   @@unique([userId, name])
+  @@unique([workspaceId, name])
   @@index([userId])
+  @@index([workspaceId])
 }
 
 model BuyGroup {
-  id        String   @id @default(cuid())
-  userId    String?
-  name      String
-  createdAt DateTime @default(now())
-  orders    Order[]
+  id          String     @id @default(cuid())
+  userId      String?
+  workspaceId String?
+  name        String
+  createdAt   DateTime   @default(now())
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orders      Order[]
 
   @@unique([userId, name])
+  @@unique([workspaceId, name])
   @@index([userId])
+  @@index([workspaceId])
 }
 
 model Warehouse {
-  id        String   @id @default(cuid())
-  userId    String?
-  name      String
-  code      String
-  createdAt DateTime @default(now())
-  orders    Order[]
+  id          String     @id @default(cuid())
+  userId      String?
+  workspaceId String?
+  name        String
+  code        String
+  createdAt   DateTime   @default(now())
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orders      Order[]
 
   @@unique([userId, name])
   @@unique([userId, code])
+  @@unique([workspaceId, name])
+  @@unique([workspaceId, code])
   @@index([userId])
+  @@index([workspaceId])
 }
 
 model Order {
-  id                      String         @id @default(cuid())
-  itemName                String
-  quantity                Int
-  retailPrice             Float
-  payoutPerUnit           Float
-  chaseCashbackPercent    Float          @default(0)
-  youngAdultEligible      Boolean        @default(false)
-  sameTracking            Boolean        @default(false)
-  shippingType            String?
-  orderNumber             String?
-  trackingNumber          String?
-  trackingSubmitted       Boolean        @default(false)
-  delivered               Boolean        @default(false)
-  scanned                 Boolean        @default(false)
-  paidOut                 Boolean        @default(false)
-  creditCardPaid          Boolean        @default(false)
-  profitReceived          Boolean        @default(false)
-  currentStage            OrderStage     @default(ORDERED)
-  notes                   String?
-  manualCreditCardDueDate DateTime?
-  payoutReminderSnoozedAt DateTime?
-  createdAt               DateTime       @default(now())
-  trackingAddedAt         DateTime?
-  trackingSubmittedAt     DateTime?
-  deliveredAt             DateTime?
-  scannedAt               DateTime?
-  paidOutAt               DateTime?
-  creditCardPaidAt        DateTime?
-  profitReceivedAt        DateTime?
-  updatedAt               DateTime       @updatedAt
-  userId                  String?
-  amazonAccountId         String?
-  buyGroupId              String?
-  warehouseId             String?
-  amazonAccount           AmazonAccount? @relation(fields: [amazonAccountId], references: [id], onDelete: SetNull)
-  buyGroup                BuyGroup?      @relation(fields: [buyGroupId], references: [id], onDelete: SetNull)
-  warehouse               Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  id                        String         @id @default(cuid())
+  itemName                  String
+  quantity                  Int
+  retailPrice               Float
+  payoutPerUnit             Float
+  chaseCashbackPercent      Float          @default(0)
+  youngAdultEligible        Boolean        @default(false)
+  sameTracking              Boolean        @default(false)
+  shippingType              String?
+  orderNumber               String?
+  trackingNumber            String?
+  trackingSubmitted         Boolean        @default(false)
+  delivered                 Boolean        @default(false)
+  scanned                   Boolean        @default(false)
+  paidOut                   Boolean        @default(false)
+  creditCardPaid            Boolean        @default(false)
+  profitReceived            Boolean        @default(false)
+  currentStage              OrderStage     @default(ORDERED)
+  notes                     String?
+  manualCreditCardDueDate   DateTime?
+  payoutReminderSnoozedAt   DateTime?
+  createdAt                 DateTime       @default(now())
+  trackingAddedAt           DateTime?
+  trackingSubmittedAt       DateTime?
+  deliveredAt               DateTime?
+  scannedAt                 DateTime?
+  paidOutAt                 DateTime?
+  creditCardPaidAt          DateTime?
+  profitReceivedAt          DateTime?
+  updatedAt                 DateTime       @updatedAt
+  userId                    String?
+  workspaceId               String?
+  submittedByProfileId      String?
+  createdByProfileId        String?
+  assignedOperatorProfileId String?
+  memberPaid                Boolean        @default(false)
+  memberPaidAt              DateTime?
+  memberPayoutAmount        Float?
+  memberVisibleNotes        String?
+  internalAdminNotes        String?
+  amazonAccountId           String?
+  buyGroupId                String?
+  warehouseId               String?
+  workspace                 Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  submittedBy               Profile?       @relation("OrderSubmittedBy", fields: [submittedByProfileId], references: [id], onDelete: SetNull)
+  createdBy                 Profile?       @relation("OrderCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  assignedOperator          Profile?       @relation("OrderAssignedOperator", fields: [assignedOperatorProfileId], references: [id], onDelete: SetNull)
+  amazonAccount             AmazonAccount? @relation(fields: [amazonAccountId], references: [id], onDelete: SetNull)
+  buyGroup                  BuyGroup?      @relation(fields: [buyGroupId], references: [id], onDelete: SetNull)
+  warehouse                 Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([workspaceId])
+  @@index([submittedByProfileId])
+  @@index([createdByProfileId])
+  @@index([assignedOperatorProfileId])
+  @@index([workspaceId, submittedByProfileId])
+  @@index([workspaceId, memberPaid])
   @@index([currentStage])
   @@index([amazonAccountId])
   @@index([buyGroupId])

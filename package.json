@@ -15,7 +15,8 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "data:export": "tsx scripts/export-sqlite.ts",
     "data:import": "tsx scripts/import-supabase.ts",
-    "data:assign-user": "tsx scripts/assign-user.ts"
+    "data:assign-user": "tsx scripts/assign-user.ts",
+    "make-workspace-owner": "tsx scripts/make-workspace-owner.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",

@@ -1,22 +1,28 @@
 import { prisma } from "@/lib/db";
 import { buildReminders, calculateFinancials } from "@/lib/domain";
-import { requireUser } from "@/lib/supabase/server";
+import { getWorkspaceContext, orderVisibilityWhere } from "@/lib/workspace";
 import CommandCenter from "@/components/CommandCenter";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
-  const user = await requireUser();
-  const userId = user.id;
+type Props = {
+  searchParams: Promise<{ workspace?: string }>;
+};
+
+export default async function Home({ searchParams }: Props) {
+  const params = await searchParams;
+  const context = await getWorkspaceContext(params.workspace);
+  const workspaceWhere = { workspaceId: context.activeWorkspace.id };
+  const orderWhere = orderVisibilityWhere(context);
   const [orders, accounts, buyGroups, warehouses] = await Promise.all([
     prisma.order.findMany({
-      where: { userId },
+      where: orderWhere,
       orderBy: [{ updatedAt: "desc" }],
-      include: { amazonAccount: true, buyGroup: true, warehouse: true }
+      include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true }
     }),
-    prisma.amazonAccount.findMany({ where: { userId }, orderBy: { name: "asc" } }),
-    prisma.buyGroup.findMany({ where: { userId }, orderBy: { name: "asc" } }),
-    prisma.warehouse.findMany({ where: { userId }, orderBy: { name: "asc" } })
+    prisma.amazonAccount.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
+    prisma.buyGroup.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
+    prisma.warehouse.findMany({ where: workspaceWhere, orderBy: { name: "asc" } })
   ]);
 
   const reminders = buildReminders(orders);
@@ -50,7 +56,23 @@ export default async function Home() {
       warehouses={warehouses}
       reminders={reminders}
       totals={{ ...totals, openOrders: openOrders.length, overdueReminders: reminders.filter((item) => item.severity === "overdue").length }}
-      userEmail={user.email ?? "Signed in"}
+      userEmail={context.profile.email}
+      workspaces={context.memberships.map((membership) => ({
+        id: membership.workspaceId,
+        name: membership.workspace.name,
+        type: membership.workspace.type,
+        role: membership.role,
+        inviteCode: membership.workspace.inviteCode
+      }))}
+      activeWorkspace={{
+        id: context.activeWorkspace.id,
+        name: context.activeWorkspace.name,
+        type: context.activeWorkspace.type,
+        role: context.role,
+        inviteCode: context.activeWorkspace.inviteCode
+      }}
+      profileId={context.profile.id}
+      isAdmin={context.isAdmin}
     />
   );
 }
