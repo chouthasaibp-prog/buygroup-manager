@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { calculateFinancials, deriveStage } from "@/lib/domain";
-import { requireWorkspaceActionContext } from "@/lib/workspace";
+import { createWorkspaceForProfile, ensureProfile, requireWorkspaceActionContext } from "@/lib/workspace";
 
 const boolFromForm = (formData: FormData, key: string) => formData.get(key) === "on" || formData.get(key) === "true";
 const numberFromForm = (formData: FormData, key: string, fallback = 0) => Number(formData.get(key) || fallback);
@@ -399,6 +399,67 @@ export async function updateWorkspaceMemberStatus(formData: FormData) {
   await prisma.workspaceMember.update({
     where: { id: memberId },
     data: { status: status as "ACTIVE" | "SUSPENDED" }
+  });
+
+  revalidatePath("/");
+}
+
+export async function updateProfile(formData: FormData) {
+  const profile = await ensureProfile();
+  const firstName = optionalString(formData, "firstName");
+  const lastName = optionalString(formData, "lastName");
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+
+  await prisma.profile.update({
+    where: { id: profile.id },
+    data: {
+      firstName,
+      lastName,
+      name: fullName || profile.email
+    }
+  });
+
+  revalidatePath("/");
+}
+
+export async function createPersonalWorkspaceFromApp() {
+  const profile = await ensureProfile();
+  const existing = await prisma.workspaceMember.findFirst({
+    where: {
+      profileId: profile.id,
+      workspace: { type: "PERSONAL", ownerProfileId: profile.id }
+    }
+  });
+  if (!existing) {
+    await createWorkspaceForProfile(profile, "PERSONAL", `${profile.firstName || profile.name || "My"} Personal`);
+  }
+  revalidatePath("/");
+}
+
+export async function createOperatorWorkspaceFromApp(formData: FormData) {
+  const profile = await ensureProfile();
+  const name = optionalString(formData, "workspaceName") || `${profile.firstName || profile.name || "My"} Buy Group Ops`;
+  await createWorkspaceForProfile(profile, "OPERATOR", name);
+  revalidatePath("/");
+}
+
+export async function joinOperatorWorkspaceFromApp(formData: FormData) {
+  const profile = await ensureProfile();
+  const rawInvite = optionalString(formData, "inviteCode") ?? "";
+  const inviteCode = rawInvite.split("/").filter(Boolean).at(-1)?.toUpperCase() ?? rawInvite.toUpperCase();
+  const workspace = await prisma.workspace.findUnique({ where: { inviteCode } });
+  if (!workspace || workspace.type !== "OPERATOR") throw new Error("Invite code not found.");
+
+  await prisma.workspaceMember.upsert({
+    where: { workspaceId_profileId: { workspaceId: workspace.id, profileId: profile.id } },
+    update: { role: "MEMBER", status: "ACTIVE", joinedAt: new Date() },
+    create: {
+      workspaceId: workspace.id,
+      profileId: profile.id,
+      role: "MEMBER",
+      status: "ACTIVE",
+      joinedAt: new Date()
+    }
   });
 
   revalidatePath("/");

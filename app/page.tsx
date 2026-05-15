@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { buildReminders, calculateFinancials } from "@/lib/domain";
-import { getWorkspaceContext, orderVisibilityWhere } from "@/lib/workspace";
+import { displayProfileName, getWorkspaceContext, orderVisibilityWhere } from "@/lib/workspace";
 import CommandCenter from "@/components/CommandCenter";
 
 export const dynamic = "force-dynamic";
@@ -64,6 +64,12 @@ export default async function Home({ searchParams }: Props) {
       reminders={reminders}
       totals={{ ...totals, openOrders: openOrders.length, overdueReminders: reminders.filter((item) => item.severity === "overdue").length }}
       userEmail={context.profile.email}
+      profile={{
+        firstName: context.profile.firstName,
+        lastName: context.profile.lastName,
+        name: displayProfileName(context.profile),
+        email: context.profile.email
+      }}
       workspaces={context.memberships.map((membership) => ({
         id: membership.workspaceId,
         name: membership.workspace.name,
@@ -86,7 +92,9 @@ export default async function Home({ searchParams }: Props) {
         role: membership.role,
         status: membership.status,
         joinedAt: membership.joinedAt?.toISOString() ?? null,
-        name: membership.profile.name,
+        firstName: membership.profile.firstName,
+        lastName: membership.profile.lastName,
+        name: displayProfileName(membership.profile),
         email: membership.profile.email
       }))}
     />

@@ -41,7 +41,17 @@ export default async function LoginPage({ searchParams }: Props) {
         <form action={signUp} className="space-y-3">
           <div>
             <h2 className="text-sm font-semibold text-white">Create account</h2>
-            <p className="mt-1 text-xs text-muted">Use the same email/password fields below to create a Supabase Auth user.</p>
+            <p className="mt-1 text-xs text-muted">Create a Supabase Auth user with your profile name.</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs text-muted">First name</span>
+              <input name="firstName" required className="w-full px-3 py-2 text-sm" />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs text-muted">Last name</span>
+              <input name="lastName" required className="w-full px-3 py-2 text-sm" />
+            </label>
           </div>
           <label className="block">
             <span className="mb-1 block text-xs text-muted">Email</span>

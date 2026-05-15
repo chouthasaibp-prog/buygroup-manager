@@ -25,6 +25,8 @@ They can choose:
 2. **Join an Operator**: joins an operator workspace as `MEMBER` with an invite code.
 3. **Create Operator Workspace**: creates an operator workspace and makes the user `OWNER`.
 
+Users can also create a personal workspace, create an operator workspace, or join an operator workspace later from **Settings > Workspaces**. A user can belong to multiple workspaces and switch between them from the workspace selector in the sidebar.
+
 ## Existing Data
 
 Existing rows were preserved. To assign old imported rows to a workspace, use:
@@ -50,8 +52,13 @@ Server-side checks enforce:
 - Operator `MEMBER` users only see orders they submitted.
 - Members can create orders and add tracking to their own orders.
 - Admin-only actions, such as marking tracking submitted, paid out, profit received, or member paid, are blocked server-side for members.
+- Operator/admin order views show the submitting member's name/email and support filtering by member, stage, Amazon account, buy group, warehouse, and search text.
 
 Supabase RLS policies are also installed as a database backstop for direct Supabase access.
+
+## Profile Names
+
+Signup collects first name, last name, email, and password. Existing profiles without first/last name fall back to email for display. Users can edit first and last name from **Settings > Profile**.
 
 ## Vercel
 

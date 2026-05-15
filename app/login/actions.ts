@@ -23,10 +23,22 @@ export async function signIn(formData: FormData) {
 
 export async function signUp(formData: FormData) {
   const supabase = await createSupabaseServerClient();
+  const firstName = formValue(formData, "firstName");
+  const lastName = formValue(formData, "lastName");
   const email = formValue(formData, "email");
   const password = formValue(formData, "password");
 
-  const { error } = await supabase.auth.signUp({ email, password });
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        firstName,
+        lastName,
+        name: [firstName, lastName].filter(Boolean).join(" ").trim()
+      }
+    }
+  });
   if (error) {
     redirect(`/login?error=${encodeURIComponent(error.message)}`);
   }

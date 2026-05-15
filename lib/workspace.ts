@@ -23,17 +23,27 @@ export function generateInviteCode() {
 export async function ensureProfile() {
   const user = await requireUser();
   const email = user.email ?? `${user.id}@supabase.local`;
-  const name = user.user_metadata?.name ?? user.user_metadata?.full_name ?? email.split("@")[0];
+  const firstName = typeof user.user_metadata?.firstName === "string" ? user.user_metadata.firstName : null;
+  const lastName = typeof user.user_metadata?.lastName === "string" ? user.user_metadata.lastName : null;
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const name = fullName || user.user_metadata?.name || user.user_metadata?.full_name || null;
 
   return prisma.profile.upsert({
     where: { authUserId: user.id },
-    update: { email, name },
+    update: { email, ...(name ? { name } : {}), ...(firstName ? { firstName } : {}), ...(lastName ? { lastName } : {}) },
     create: {
       authUserId: user.id,
       email,
-      name
+      name,
+      firstName,
+      lastName
     }
   });
+}
+
+export function displayProfileName(profile: Pick<Profile, "firstName" | "lastName" | "name" | "email">) {
+  const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
+  return fullName || profile.name || profile.email;
 }
 
 export async function getWorkspaceMemberships(profileId: string) {

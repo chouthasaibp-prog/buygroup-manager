@@ -27,7 +27,7 @@ export type OrderWithRelations = Order & {
   amazonAccount: { id: string; name: string; defaultCreditCardDueDays: number | null } | null;
   buyGroup: { id: string; name: string } | null;
   warehouse: { id: string; name: string; code: string } | null;
-  submittedBy?: { id: string; name: string | null; email: string } | null;
+  submittedBy?: { id: string; name: string | null; firstName: string | null; lastName: string | null; email: string } | null;
 };
 
 export type Financials = {

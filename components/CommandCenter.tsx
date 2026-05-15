@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, OrderStage, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
 import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOrder, deleteOrder, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder, updateWorkspaceMemberStatus } from "@/app/actions";
+import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder, updateProfile, updateWorkspaceMemberStatus } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels, stages } from "@/lib/domain";
 
@@ -24,6 +24,12 @@ type Props = {
     unrealizedProfit: number;
   };
   userEmail: string;
+  profile: {
+    firstName: string | null;
+    lastName: string | null;
+    name: string;
+    email: string;
+  };
   profileId: string;
   isAdmin: boolean;
   activeWorkspace: WorkspaceSwitcherItem;
@@ -45,6 +51,8 @@ type WorkspaceMemberItem = {
   role: WorkspaceRole;
   status: string;
   joinedAt: string | null;
+  firstName: string | null;
+  lastName: string | null;
   name: string | null;
   email: string;
 };
@@ -125,13 +133,21 @@ function reminderTone(severity: Reminder["severity"]) {
   return "border-slate-500/40 bg-slate-500/10";
 }
 
-export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, totals, userEmail, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
+function memberName(order: OrderWithRelations) {
+  if (!order.submittedBy) return "Unknown member";
+  const fullName = [order.submittedBy.firstName, order.submittedBy.lastName].filter(Boolean).join(" ").trim();
+  return fullName || order.submittedBy.name || order.submittedBy.email;
+}
+
+export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const [section, setSection] = useState<string>("dashboard");
   const [stage, setStage] = useState<OrderStage | "ALL">("ORDERED");
   const [query, setQuery] = useState("");
   const [accountFilter, setAccountFilter] = useState("ALL");
   const [buyGroupFilter, setBuyGroupFilter] = useState("ALL");
+  const [warehouseFilter, setWarehouseFilter] = useState("ALL");
+  const [memberFilter, setMemberFilter] = useState("ALL");
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<OrderWithRelations | null>(null);
 
@@ -141,15 +157,20 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
       const inStage = stage === "ALL" || order.currentStage === stage;
       const inAccount = accountFilter === "ALL" || order.amazonAccountId === accountFilter;
       const inBuyGroup = buyGroupFilter === "ALL" || order.buyGroupId === buyGroupFilter;
+      const inWarehouse = warehouseFilter === "ALL" || order.warehouseId === warehouseFilter;
+      const inMember = memberFilter === "ALL" || order.submittedByProfileId === memberFilter;
       const matches =
         order.itemName.toLowerCase().includes(q) ||
         order.orderNumber?.toLowerCase().includes(q) ||
         order.trackingNumber?.toLowerCase().includes(q) ||
         order.amazonAccount?.name.toLowerCase().includes(q) ||
-        order.buyGroup?.name.toLowerCase().includes(q);
-      return inStage && inAccount && inBuyGroup && (!q || matches);
+        order.buyGroup?.name.toLowerCase().includes(q) ||
+        order.warehouse?.name.toLowerCase().includes(q) ||
+        order.submittedBy?.email.toLowerCase().includes(q) ||
+        memberName(order).toLowerCase().includes(q);
+      return inStage && inAccount && inBuyGroup && inWarehouse && inMember && (!q || matches);
     });
-  }, [accountFilter, buyGroupFilter, orders, query, stage]);
+  }, [accountFilter, buyGroupFilter, memberFilter, orders, query, stage, warehouseFilter]);
 
   const counts = useMemo(() => {
     const result = new Map<OrderStage | "ALL", number>();
@@ -231,6 +252,9 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
               orders={filteredOrders}
               accounts={accounts}
               buyGroups={buyGroups}
+              warehouses={warehouses}
+              workspaceMembers={workspaceMembers}
+              isAdmin={isAdmin}
               counts={counts}
               stage={stage}
               setStage={setStage}
@@ -240,25 +264,50 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
               setAccountFilter={setAccountFilter}
               buyGroupFilter={buyGroupFilter}
               setBuyGroupFilter={setBuyGroupFilter}
+              warehouseFilter={warehouseFilter}
+              setWarehouseFilter={setWarehouseFilter}
+              memberFilter={memberFilter}
+              setMemberFilter={setMemberFilter}
               setSelectedOrder={setSelectedOrder}
             />
           )}
           {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} />}
           {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} />}
           {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
-          {section === "queues" && <OperatorQueues orders={orders} setStage={setStage} setSection={setSection} />}
+          {section === "queues" && (
+            <div className="space-y-4">
+              <FilterBar
+                query={query}
+                setQuery={setQuery}
+                accountFilter={accountFilter}
+                setAccountFilter={setAccountFilter}
+                buyGroupFilter={buyGroupFilter}
+                setBuyGroupFilter={setBuyGroupFilter}
+                warehouseFilter={warehouseFilter}
+                setWarehouseFilter={setWarehouseFilter}
+                memberFilter={memberFilter}
+                setMemberFilter={setMemberFilter}
+                accounts={accounts}
+                buyGroups={buyGroups}
+                warehouses={warehouses}
+                workspaceMembers={workspaceMembers}
+                showMemberFilter={isAdmin}
+              />
+              <OperatorQueues orders={filteredOrders} setStage={setStage} setSection={setSection} />
+            </div>
+          )}
           {section === "members" && <MembersView activeWorkspace={activeWorkspace} orders={orders} workspaceMembers={workspaceMembers} profileId={profileId} />}
           {section === "memberPayouts" && <MemberPayoutsView orders={orders} activeWorkspace={activeWorkspace} />}
           {section === "trackingNeeded" && <TrackingNeededView orders={orders} />}
           {section === "myPayouts" && <MyPayoutsView orders={orders} />}
           {section === "analytics" && <AnalyticsView orders={orders} />}
           {section === "importExport" && <ImportExportView orders={orders} />}
-          {section === "settings" && <SettingsView />}
+          {section === "settings" && <SettingsView profile={profile} activeWorkspace={activeWorkspace} workspaces={workspaces} />}
         </div>
       </section>
 
       {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} onClose={() => setNewOrderOpen(false)} />}
-      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} isAdmin={isAdmin} onClose={() => setSelectedOrder(null)} />}
+      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} memberStatus={workspaceMembers.find((member) => member.profileId === selectedOrder.submittedByProfileId)?.status ?? null} isAdmin={isAdmin} onClose={() => setSelectedOrder(null)} />}
     </main>
   );
 }
@@ -401,10 +450,74 @@ function ReminderAction({ reminder, buyGroups }: { reminder: Reminder; buyGroups
   );
 }
 
-function OrdersView({ orders, accounts, buyGroups, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, setSelectedOrder }: {
+function FilterBar({
+  query,
+  setQuery,
+  accountFilter,
+  setAccountFilter,
+  buyGroupFilter,
+  setBuyGroupFilter,
+  warehouseFilter,
+  setWarehouseFilter,
+  memberFilter,
+  setMemberFilter,
+  accounts,
+  buyGroups,
+  warehouses,
+  workspaceMembers,
+  showMemberFilter
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+  accountFilter: string;
+  setAccountFilter: (value: string) => void;
+  buyGroupFilter: string;
+  setBuyGroupFilter: (value: string) => void;
+  warehouseFilter: string;
+  setWarehouseFilter: (value: string) => void;
+  memberFilter: string;
+  setMemberFilter: (value: string) => void;
+  accounts: AmazonAccount[];
+  buyGroups: BuyGroup[];
+  warehouses: Warehouse[];
+  workspaceMembers: WorkspaceMemberItem[];
+  showMemberFilter: boolean;
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+      <label className="flex min-w-0 items-center gap-2 rounded-lg border border-cyan/20 bg-panel/80 px-3 py-2 text-muted shadow-glow">
+        <Search size={16} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search orders or members" className="w-full min-w-0 border-0 bg-transparent p-0 text-sm focus:shadow-none" />
+      </label>
+      {showMemberFilter && (
+        <select value={memberFilter} onChange={(event) => setMemberFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
+          <option value="ALL">All members</option>
+          {workspaceMembers.map((member) => <option key={member.profileId} value={member.profileId}>{member.name ?? member.email}</option>)}
+        </select>
+      )}
+      <select value={accountFilter} onChange={(event) => setAccountFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
+        <option value="ALL">All Amazon accounts</option>
+        {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+      </select>
+      <select value={buyGroupFilter} onChange={(event) => setBuyGroupFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
+        <option value="ALL">All buy groups</option>
+        {buyGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+      </select>
+      <select value={warehouseFilter} onChange={(event) => setWarehouseFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
+        <option value="ALL">All warehouses</option>
+        {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers, isAdmin, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, warehouseFilter, setWarehouseFilter, memberFilter, setMemberFilter, setSelectedOrder }: {
   orders: OrderWithRelations[];
   accounts: AmazonAccount[];
   buyGroups: BuyGroup[];
+  warehouses: Warehouse[];
+  workspaceMembers: WorkspaceMemberItem[];
+  isAdmin: boolean;
   counts: Map<OrderStage | "ALL", number>;
   stage: OrderStage | "ALL";
   setStage: (value: OrderStage | "ALL") => void;
@@ -414,6 +527,10 @@ function OrdersView({ orders, accounts, buyGroups, counts, stage, setStage, quer
   setAccountFilter: (value: string) => void;
   buyGroupFilter: string;
   setBuyGroupFilter: (value: string) => void;
+  warehouseFilter: string;
+  setWarehouseFilter: (value: string) => void;
+  memberFilter: string;
+  setMemberFilter: (value: string) => void;
   setSelectedOrder: (order: OrderWithRelations) => void;
 }) {
   return (
@@ -435,19 +552,8 @@ function OrdersView({ orders, accounts, buyGroups, counts, stage, setStage, quer
             </button>
           ))}
         </div>
-        <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[760px]">
-          <label className="flex min-w-0 items-center gap-2 rounded-lg border border-cyan/20 bg-panel/80 px-3 py-2 text-muted shadow-glow">
-            <Search size={16} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search orders" className="w-full min-w-0 border-0 bg-transparent p-0 text-sm focus:shadow-none" />
-          </label>
-          <select value={accountFilter} onChange={(event) => setAccountFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
-            <option value="ALL">All Amazon accounts</option>
-            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
-          </select>
-          <select value={buyGroupFilter} onChange={(event) => setBuyGroupFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
-            <option value="ALL">All buy groups</option>
-            {buyGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-          </select>
+        <div className="xl:min-w-[900px]">
+          <FilterBar query={query} setQuery={setQuery} accountFilter={accountFilter} setAccountFilter={setAccountFilter} buyGroupFilter={buyGroupFilter} setBuyGroupFilter={setBuyGroupFilter} warehouseFilter={warehouseFilter} setWarehouseFilter={setWarehouseFilter} memberFilter={memberFilter} setMemberFilter={setMemberFilter} accounts={accounts} buyGroups={buyGroups} warehouses={warehouses} workspaceMembers={workspaceMembers} showMemberFilter={isAdmin} />
         </div>
       </div>
       <div className="space-y-3">
@@ -463,6 +569,8 @@ function OrderQueueCard({ order, stage, onOpen }: { order: OrderWithRelations; s
   const displayStage = stage === "ALL" ? order.currentStage : stage;
   const fieldsByStage: Record<OrderStage, Array<[string, string]>> = {
     ORDERED: [
+      ["Submitted by", memberName(order)],
+      ["Member email", order.submittedBy?.email ?? "Unknown"],
       ["Qty", String(order.quantity)],
       ["Account", order.amazonAccount?.name ?? "Missing"],
       ["Group", order.buyGroup?.name ?? "Missing"],
@@ -531,6 +639,7 @@ function OrderQueueCard({ order, stage, onOpen }: { order: OrderWithRelations; s
             <h3 className="truncate font-semibold">{order.itemName}</h3>
             <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{stageLabels[order.currentStage]}</span>
           </div>
+          {order.submittedBy && <div className="mt-1 text-xs text-muted">Submitted by <span className="text-white">{memberName(order)}</span> · {order.submittedBy.email}</div>}
           <div className="mt-3 flex flex-wrap gap-2">
             {fieldsByStage[displayStage as OrderStage].map(([label, value]) => (
               <span key={label} className="rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
@@ -609,7 +718,7 @@ function NewOrderModal({ accounts, buyGroups, workspaceId, onClose }: { accounts
   );
 }
 
-function OrderPanel({ order, accounts, buyGroups, workspaceId, isAdmin, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; isAdmin: boolean; onClose: () => void }) {
+function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, memberStatus, isAdmin, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; workspaceName: string; memberStatus: string | null; isAdmin: boolean; onClose: () => void }) {
   const financials = calculateFinancials(order);
   const timeline = [
     ["Created", order.createdAt],
@@ -639,8 +748,11 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, isAdmin, onClose 
               <CheckField name="creditCardPaid" label="Credit card paid" defaultChecked={order.creditCardPaid} />
               <CheckField name="profitReceived" label="Profit received" defaultChecked={order.profitReceived} />
               <CheckField name="memberPaid" label="Member paid" defaultChecked={order.memberPaid} />
+              <Field label="Member payout amount"><input name="memberPayoutAmount" type="number" min="0" step="0.01" defaultValue={order.memberPayoutAmount ?? financials.amountOwed} className="w-full px-3 py-2 text-sm" /></Field>
+              <Field label="Admin-only notes" wide><textarea name="internalAdminNotes" defaultValue={order.internalAdminNotes ?? ""} rows={3} className="w-full resize-none px-3 py-2 text-sm" /></Field>
             </div>
           )}
+          <Field label="Member-visible notes" wide><textarea name="memberVisibleNotes" defaultValue={order.memberVisibleNotes ?? ""} rows={3} className="w-full resize-none px-3 py-2 text-sm" /></Field>
           <div>
             <label className="mb-1 block text-xs text-muted">Manual credit card due date</label>
             <input name="manualCreditCardDueDate" type="date" defaultValue={order.manualCreditCardDueDate ? new Date(order.manualCreditCardDueDate).toISOString().slice(0, 10) : ""} className="w-full px-3 py-2 text-sm" />
@@ -651,6 +763,15 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, isAdmin, onClose 
           </div>
         </form>
         <aside className="space-y-4">
+          <div className="rounded-lg border border-line bg-surface/60 p-4">
+            <div className="mb-3 text-sm font-semibold">Submission</div>
+            <Fact label="Submitted by" value={memberName(order)} />
+            <Fact label="Member email" value={order.submittedBy?.email ?? "Unknown"} />
+            <Fact label="Workspace" value={workspaceName} />
+            <Fact label="Member status" value={memberStatus ?? "Unknown"} />
+            <Fact label="Member paid" value={order.memberPaid ? "Yes" : "No"} />
+            <Fact label="Member payout" value={money(order.memberPayoutAmount ?? financials.amountOwed)} />
+          </div>
           <div className="rounded-lg border border-line bg-surface/60 p-4">
             <div className="mb-3 text-sm font-semibold">Financials</div>
             {[
@@ -965,7 +1086,7 @@ function groupOrdersByMember(orders: OrderWithRelations[]) {
   const map = new Map<string, { id: string; name: string; orders: OrderWithRelations[]; unpaid: number; paid: number }>();
   for (const order of orders) {
     const id = order.submittedBy?.id ?? "unknown";
-    const name = order.submittedBy?.name ?? order.submittedBy?.email ?? "Unknown member";
+    const name = memberName(order);
     const existing = map.get(id) ?? { id, name, orders: [], unpaid: 0, paid: 0 };
     const amount = order.memberPayoutAmount ?? calculateFinancials(order).amountOwed;
     existing.orders.push(order);
@@ -1213,20 +1334,63 @@ function ProfitChart({ series }: { series: ReturnType<typeof buildProfitSeries> 
   );
 }
 
-function SettingsView() {
+function SettingsView({ profile, activeWorkspace, workspaces }: { profile: Props["profile"]; activeWorkspace: WorkspaceSwitcherItem; workspaces: WorkspaceSwitcherItem[] }) {
+  const hasPersonalWorkspace = workspaces.some((workspace) => workspace.type === "PERSONAL");
   return (
-    <div className="rounded-lg border border-slate-500/30 bg-panel/80 p-5 shadow-glow">
-      <h2 className="mb-4 font-semibold">Notification Settings</h2>
-      {["In-app only", "Email", "Google Calendar", "n8n webhook"].map((label, index) => (
-        <label key={label} className="mb-3 flex items-center gap-3 rounded-lg border border-line bg-surface/60 px-3 py-3">
-          <input type="radio" name="notifications" defaultChecked={index === 0} />
-          <span>{label}</span>
-          {index > 0 && <span className="ml-auto text-xs text-muted">Placeholder</span>}
-        </label>
-      ))}
-      <div className="mt-4 rounded-lg border border-line bg-surface/60 p-4 text-sm text-muted">
-        Future credentials belong in `.env`: email API key, Google OAuth credentials, and webhook URLs. Missing integrations are skipped safely.
-      </div>
+    <div className="space-y-4">
+      <section className="rounded-lg border border-cyan/20 bg-panel/80 p-5 shadow-glow">
+        <h2 className="mb-4 font-semibold">Profile</h2>
+        <form action={updateProfile} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+          <input name="firstName" defaultValue={profile.firstName ?? ""} placeholder="First name" className="w-full px-3 py-2 text-sm" />
+          <input name="lastName" defaultValue={profile.lastName ?? ""} placeholder="Last name" className="w-full px-3 py-2 text-sm" />
+          <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Save Profile</button>
+        </form>
+        <div className="mt-3 text-sm text-muted">Signed in as {profile.email}</div>
+      </section>
+
+      <section className="rounded-lg border border-blue-400/20 bg-panel/80 p-5 shadow-glow">
+        <h2 className="mb-4 font-semibold">Workspaces</h2>
+        <div className="grid gap-3 lg:grid-cols-3">
+          <form action={createPersonalWorkspaceFromApp} className="rounded-lg border border-line bg-surface/60 p-4">
+            <h3 className="font-semibold">Create Personal Workspace</h3>
+            <p className="mt-2 min-h-16 text-sm text-muted">Track your own direct orders separately from operator/member workspaces.</p>
+            <button disabled={hasPersonalWorkspace} className="mt-4 rounded-lg border border-cyan/40 bg-cyan/15 px-3 py-2 text-sm font-medium text-cyan disabled:cursor-not-allowed disabled:opacity-45">
+              {hasPersonalWorkspace ? "Personal Exists" : "Create Personal"}
+            </button>
+          </form>
+          <form action={createOperatorWorkspaceFromApp} className="rounded-lg border border-line bg-surface/60 p-4">
+            <h3 className="font-semibold">Create Operator Workspace</h3>
+            <p className="mt-2 text-sm text-muted">Manage orders from friends or sub-sellers.</p>
+            <input name="workspaceName" required placeholder="Sai Buy Group Ops" className="mt-3 w-full px-3 py-2 text-sm" />
+            <button className="mt-4 rounded-lg bg-green-500 px-3 py-2 text-sm font-medium text-white">Create Operator</button>
+          </form>
+          <form action={joinOperatorWorkspaceFromApp} className="rounded-lg border border-line bg-surface/60 p-4">
+            <h3 className="font-semibold">Join Operator Workspace</h3>
+            <p className="mt-2 text-sm text-muted">Enter an invite code from an operator.</p>
+            <input name="inviteCode" required placeholder="Invite code" className="mt-3 w-full px-3 py-2 text-sm" />
+            <button className="mt-4 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Join Workspace</button>
+          </form>
+        </div>
+        {activeWorkspace.type === "OPERATOR" && (
+          <div className="mt-4 rounded-lg border border-line bg-surface/60 p-4 text-sm text-muted">
+            Current operator invite code: <span className="font-semibold text-white">{activeWorkspace.inviteCode}</span>
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-lg border border-slate-500/30 bg-panel/80 p-5 shadow-glow">
+        <h2 className="mb-4 font-semibold">Notification Settings</h2>
+        {["In-app only", "Email", "Google Calendar", "n8n webhook"].map((label, index) => (
+          <label key={label} className="mb-3 flex items-center gap-3 rounded-lg border border-line bg-surface/60 px-3 py-3">
+            <input type="radio" name="notifications" defaultChecked={index === 0} />
+            <span>{label}</span>
+            {index > 0 && <span className="ml-auto text-xs text-muted">Placeholder</span>}
+          </label>
+        ))}
+        <div className="mt-4 rounded-lg border border-line bg-surface/60 p-4 text-sm text-muted">
+          Future credentials belong in `.env`: email API key, Google OAuth credentials, and webhook URLs. Missing integrations are skipped safely.
+        </div>
+      </section>
     </div>
   );
 }
