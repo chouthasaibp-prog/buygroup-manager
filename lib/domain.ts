@@ -1,26 +1,26 @@
 import type { Order, OrderStage } from "@prisma/client";
 
 export const stages: Array<{ key: OrderStage | "ALL"; label: string; short: string }> = [
-  { key: "ALL", label: "All Orders", short: "All" },
-  { key: "ORDERED", label: "Ordered", short: "Ordered" },
-  { key: "TRACKING_READY", label: "Tracking Ready", short: "Ready" },
-  { key: "TRACKING_SUBMITTED", label: "Tracking Submitted", short: "Submitted" },
-  { key: "DELIVERED", label: "Delivered", short: "Delivered" },
-  { key: "SCANNED", label: "Scanned", short: "Scanned" },
-  { key: "PAID_OUT", label: "Paid Out", short: "Paid" },
-  { key: "CREDIT_PAID", label: "Credit Paid", short: "Credit" },
-  { key: "PROFIT_RECEIVED", label: "Profit Received", short: "Done" }
+  { key: "ALL", label: "All", short: "All" },
+  { key: "ORDERED", label: "Waiting for Member Tracking", short: "Waiting for Member Tracking" },
+  { key: "TRACKING_READY", label: "Tracking Received from Member", short: "Tracking Received from Member" },
+  { key: "TRACKING_SUBMITTED", label: "Submitted to Warehouse", short: "Submitted to Warehouse" },
+  { key: "DELIVERED", label: "Delivered by Member", short: "Delivered by Member" },
+  { key: "SCANNED", label: "Scanned by Warehouse", short: "Scanned by Warehouse" },
+  { key: "PAID_OUT", label: "Paid Out from Warehouse", short: "Paid Out from Warehouse" },
+  { key: "CREDIT_PAID", label: "Paid to Member", short: "Paid to Member" },
+  { key: "PROFIT_RECEIVED", label: "Done", short: "Done" }
 ];
 
 export const stageLabels: Record<OrderStage, string> = {
-  ORDERED: "Ordered",
-  TRACKING_READY: "Tracking Ready",
-  TRACKING_SUBMITTED: "Tracking Submitted",
-  DELIVERED: "Delivered",
-  SCANNED: "Scanned",
-  PAID_OUT: "Paid Out",
-  CREDIT_PAID: "Credit Paid",
-  PROFIT_RECEIVED: "Profit Received"
+  ORDERED: "Waiting for Member Tracking",
+  TRACKING_READY: "Tracking Received from Member",
+  TRACKING_SUBMITTED: "Submitted to Warehouse",
+  DELIVERED: "Delivered by Member",
+  SCANNED: "Scanned by Warehouse",
+  PAID_OUT: "Paid Out from Warehouse",
+  CREDIT_PAID: "Paid to Member",
+  PROFIT_RECEIVED: "Done"
 };
 
 export type OrderWithRelations = Order & {

@@ -27,6 +27,9 @@ const optionalAmazonTrackingNumber = (formData: FormData) => {
   if (!value) return null;
   return value.toUpperCase();
 };
+export type AddTrackingState = {
+  error: string | null;
+};
 const destinationCodeFor = (name: string) => {
   if (name.toLowerCase() === "electronic buyers") return "EB";
   const compact = name.replace(/[^a-z0-9]/gi, "").toUpperCase();
@@ -214,38 +217,48 @@ export async function updateOrder(formData: FormData) {
   revalidatePath("/");
 }
 
-export async function addTracking(formData: FormData) {
-  const context = await requireWorkspaceActionContext(formData);
-  const isOperatorAdmin = context.activeWorkspace.type === "OPERATOR" && context.isAdmin;
-  const workspaceId = context.activeWorkspace.id;
-  const id = String(formData.get("id"));
+export async function addTracking(_previousState: AddTrackingState, formData: FormData): Promise<AddTrackingState> {
   const trackingNumber = optionalAmazonTrackingNumber(formData);
-  const existing = await prisma.order.findFirstOrThrow({
-    where: {
-      id,
-      workspaceId,
-      submittedByProfileId: context.profile.id
-    }
-  });
-  if (isOperatorAdmin) {
-    throw new Error("Operator admins cannot enter member tracking numbers.");
-  }
   if (!trackingNumber) {
-    throw new Error("Tracking number is required.");
+    return { error: "Tracking number required." };
   }
 
-  await prisma.order.update({
-    where: { id },
-    data: {
-      trackingNumber,
-      trackingAddedAt: trackingNumber && !existing.trackingNumber ? new Date() : existing.trackingAddedAt,
-      memberSubmittedTrackingToAdmin: true,
-      memberSubmittedTrackingToAdminAt: !existing.memberSubmittedTrackingToAdmin ? new Date() : existing.memberSubmittedTrackingToAdminAt
+  try {
+    const context = await requireWorkspaceActionContext(formData);
+    const isOperatorAdmin = context.activeWorkspace.type === "OPERATOR" && context.isAdmin;
+    const workspaceId = context.activeWorkspace.id;
+    const id = String(formData.get("id") ?? "");
+    if (isOperatorAdmin) {
+      return { error: "Operator admins cannot enter member tracking numbers." };
     }
-  });
 
-  await deriveStagePatch(workspaceId, id);
-  revalidatePath("/");
+    const existing = await prisma.order.findFirst({
+      where: {
+        id,
+        workspaceId,
+        submittedByProfileId: context.profile.id
+      }
+    });
+    if (!existing) {
+      return { error: "Order not found." };
+    }
+
+    await prisma.order.update({
+      where: { id },
+      data: {
+        trackingNumber,
+        trackingAddedAt: trackingNumber && !existing.trackingNumber ? new Date() : existing.trackingAddedAt,
+        memberSubmittedTrackingToAdmin: true,
+        memberSubmittedTrackingToAdminAt: !existing.memberSubmittedTrackingToAdmin ? new Date() : existing.memberSubmittedTrackingToAdminAt
+      }
+    });
+
+    await deriveStagePatch(workspaceId, id);
+    revalidatePath("/");
+    return { error: null };
+  } catch {
+    return { error: "Unable to submit tracking. Please try again." };
+  }
 }
 
 export async function quickAction(formData: FormData) {

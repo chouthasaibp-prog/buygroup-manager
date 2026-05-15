@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, OrderStage, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
 import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder, updateProfile, updateWorkspaceMemberStatus } from "@/app/actions";
+import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
-import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels, stages } from "@/lib/domain";
+import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
 type Props = {
   orders: OrderWithRelations[];
@@ -57,6 +57,30 @@ type WorkspaceMemberItem = {
   email: string;
 };
 
+type StageFilter = OrderStage | "ALL" | "ADMIN_PAID_TO_MEMBER" | "ADMIN_DONE" | "MEMBER_TRACKING_SENT" | "MEMBER_PAID" | "MEMBER_DONE";
+
+const adminStages: Array<{ key: StageFilter; label: string; short: string }> = [
+  { key: "ALL", label: "All", short: "All" },
+  { key: "ORDERED", label: "Waiting for Member Tracking", short: "Waiting for Member Tracking" },
+  { key: "TRACKING_READY", label: "Tracking Received from Member", short: "Tracking Received from Member" },
+  { key: "TRACKING_SUBMITTED", label: "Submitted to Warehouse", short: "Submitted to Warehouse" },
+  { key: "DELIVERED", label: "Delivered by Member", short: "Delivered by Member" },
+  { key: "SCANNED", label: "Scanned by Warehouse", short: "Scanned by Warehouse" },
+  { key: "PAID_OUT", label: "Paid Out from Warehouse", short: "Paid Out from Warehouse" },
+  { key: "ADMIN_PAID_TO_MEMBER", label: "Paid to Member", short: "Paid to Member" },
+  { key: "ADMIN_DONE", label: "Done", short: "Done" }
+];
+
+const memberStages: Array<{ key: StageFilter; label: string; short: string }> = [
+  { key: "ALL", label: "All", short: "All" },
+  { key: "ORDERED", label: "Ordered / Tracking Needed", short: "Ordered / Tracking Needed" },
+  { key: "MEMBER_TRACKING_SENT", label: "Tracking Sent to Admin", short: "Tracking Sent to Admin" },
+  { key: "DELIVERED", label: "Delivered", short: "Delivered" },
+  { key: "SCANNED", label: "Scanned", short: "Scanned" },
+  { key: "MEMBER_PAID", label: "Paid", short: "Paid" },
+  { key: "MEMBER_DONE", label: "Done", short: "Done" }
+];
+
 const nav = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "Orders", icon: Package },
@@ -82,7 +106,7 @@ const operatorAdminNav = [
 const operatorMemberNav = [
   { key: "dashboard", label: "My Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "My Orders", icon: Package },
-  { key: "trackingNeeded", label: "Tracking Needed", icon: Upload },
+  { key: "trackingNeeded", label: "Ordered / Tracking Needed", icon: Upload },
   { key: "myPayouts", label: "My Payouts", icon: CreditCard },
   { key: "settings", label: "Settings", icon: Settings }
 ] as const;
@@ -91,13 +115,13 @@ const actionLabels: Record<string, string> = {
   submitTracking: "Submit To Warehouse",
   submitToWarehouse: "Submit To Warehouse",
   memberDelivered: "Mark Delivered",
-  scanned: "Mark Scanned By Warehouse",
-  warehouseScanned: "Mark Scanned By Warehouse",
-  paidOut: "Mark Paid Out From Warehouse",
-  warehousePaid: "Mark Paid Out From Warehouse",
+  scanned: "Mark Scanned by Warehouse",
+  warehouseScanned: "Mark Scanned by Warehouse",
+  paidOut: "Mark Paid Out from Warehouse",
+  warehousePaid: "Mark Paid Out from Warehouse",
   cardPaid: "Mark Card Paid",
-  profitReceived: "Mark Profit Received",
-  memberPaid: "Mark Paid To Member"
+  profitReceived: "Mark Done",
+  memberPaid: "Mark Paid to Member"
 };
 
 function cls(...values: Array<string | false | null | undefined>) {
@@ -146,20 +170,19 @@ function memberName(order: OrderWithRelations) {
 function memberWorkflowLabel(order: OrderWithRelations) {
   if (order.adminPaidMember || order.memberPaid || order.profitReceived) return "Paid";
   if (order.adminReceivedPayoutFromWarehouse || order.paidOut) return "Waiting For Payout";
-  if (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) return "Scanned By Warehouse";
+  if (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) return "Scanned";
   if (order.memberMarkedDelivered || order.delivered) return "Delivered";
-  if (order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) return "Waiting For Processing";
-  if (order.memberSubmittedTrackingToAdmin || order.trackingNumber) return "Tracking Sent To Admin";
-  return "Tracking Needed";
+  if (order.memberSubmittedTrackingToAdmin || order.trackingNumber) return "Tracking Sent to Admin";
+  return "Ordered / Tracking Needed";
 }
 
 function adminWorkflowLabel(order: OrderWithRelations) {
-  if (order.adminPaidMember || order.memberPaid) return "Complete";
-  if (order.adminReceivedPayoutFromWarehouse || order.paidOut) return "Paid Out From Warehouse";
-  if (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) return "Scanned By Warehouse";
-  if (order.memberMarkedDelivered || order.delivered) return "Delivered By Member";
-  if (order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) return "Submitted To Warehouse";
-  if (order.memberSubmittedTrackingToAdmin || order.trackingNumber) return "Tracking Received From Member";
+  if (order.adminPaidMember || order.memberPaid) return "Done";
+  if (order.adminReceivedPayoutFromWarehouse || order.paidOut) return "Paid Out from Warehouse";
+  if (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) return "Scanned by Warehouse";
+  if (order.memberMarkedDelivered || order.delivered) return "Delivered by Member";
+  if (order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) return "Submitted to Warehouse";
+  if (order.memberSubmittedTrackingToAdmin || order.trackingNumber) return "Tracking Received from Member";
   return "Waiting for Member Tracking";
 }
 
@@ -167,11 +190,42 @@ function yesNo(value: boolean) {
   return value ? "Yes" : "No";
 }
 
+function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilter) {
+  if (selectedStage === "ALL") return true;
+  if (selectedStage === "ORDERED") return !(order.memberSubmittedTrackingToAdmin || order.trackingNumber);
+  if (selectedStage === "MEMBER_TRACKING_SENT") return !!order.trackingNumber && !(order.memberMarkedDelivered || order.delivered) && !(order.adminPaidMember || order.memberPaid || order.profitReceived);
+  if (selectedStage === "DELIVERED") return (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminPaidMember || order.memberPaid || order.profitReceived);
+  if (selectedStage === "SCANNED") return (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminPaidMember || order.memberPaid || order.profitReceived);
+  if (selectedStage === "MEMBER_PAID") return order.adminPaidMember || order.memberPaid || order.profitReceived;
+  if (selectedStage === "MEMBER_DONE") return order.adminPaidMember || order.memberPaid || order.profitReceived;
+  return order.currentStage === selectedStage;
+}
+
+function matchesAdminStage(order: OrderWithRelations, selectedStage: StageFilter) {
+  if (selectedStage === "ALL") return true;
+  if (selectedStage === "ORDERED") return !order.trackingNumber;
+  if (selectedStage === "TRACKING_READY") return !!order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted);
+  if (selectedStage === "TRACKING_SUBMITTED") return (order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) && !(order.memberMarkedDelivered || order.delivered);
+  if (selectedStage === "DELIVERED") return (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned);
+  if (selectedStage === "SCANNED") return (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut);
+  if (selectedStage === "PAID_OUT") return (order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid);
+  if (selectedStage === "ADMIN_PAID_TO_MEMBER") return order.adminPaidMember || order.memberPaid;
+  if (selectedStage === "ADMIN_DONE") return order.adminPaidMember || order.memberPaid || order.profitReceived;
+  return order.currentStage === selectedStage;
+}
+
+function stageToneKey(stage: StageFilter): OrderStage {
+  if (stage === "MEMBER_TRACKING_SENT") return "TRACKING_READY";
+  if (stage === "MEMBER_PAID" || stage === "MEMBER_DONE" || stage === "ADMIN_PAID_TO_MEMBER" || stage === "ADMIN_DONE") return "PROFIT_RECEIVED";
+  if (stage === "ALL") return "ORDERED";
+  return stage;
+}
+
 export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const [section, setSection] = useState<string>("dashboard");
-  const [stage, setStage] = useState<OrderStage | "ALL">("ORDERED");
+  const [stage, setStage] = useState<StageFilter>("ORDERED");
   const [query, setQuery] = useState("");
   const [accountFilter, setAccountFilter] = useState("ALL");
   const [buyGroupFilter, setBuyGroupFilter] = useState("ALL");
@@ -183,7 +237,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   const filteredOrders = useMemo(() => {
     const q = query.toLowerCase();
     return orders.filter((order) => {
-      const inStage = stage === "ALL" || order.currentStage === stage;
+      const inStage = isOperatorAdmin ? matchesAdminStage(order, stage) : matchesMemberStage(order, stage);
       const inAccount = accountFilter === "ALL" || order.amazonAccountId === accountFilter;
       const inBuyGroup = buyGroupFilter === "ALL" || order.buyGroupId === buyGroupFilter;
       const inWarehouse = warehouseFilter === "ALL" || order.warehouseId === warehouseFilter;
@@ -202,11 +256,15 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   }, [accountFilter, buyGroupFilter, memberFilter, orders, query, stage, warehouseFilter]);
 
   const counts = useMemo(() => {
-    const result = new Map<OrderStage | "ALL", number>();
+    const result = new Map<StageFilter, number>();
     result.set("ALL", orders.length);
-    stages.slice(1).forEach((item) => result.set(item.key as OrderStage, orders.filter((order) => order.currentStage === item.key).length));
+    if (isOperatorAdmin) {
+      adminStages.slice(1).forEach((item) => result.set(item.key, orders.filter((order) => matchesAdminStage(order, item.key)).length));
+    } else {
+      memberStages.slice(1).forEach((item) => result.set(item.key, orders.filter((order) => matchesMemberStage(order, item.key)).length));
+    }
     return result;
-  }, [orders]);
+  }, [isOperatorAdmin, orders]);
 
   return (
     <main className="min-h-screen text-slate-100">
@@ -347,7 +405,7 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
   reminders: Reminder[];
   totals: Props["totals"];
   setSection: (value: string) => void;
-  setStage: (value: OrderStage | "ALL") => void;
+  setStage: (value: StageFilter) => void;
   setSelectedOrder: (order: OrderWithRelations) => void;
   activeWorkspace: WorkspaceSwitcherItem;
   isAdmin: boolean;
@@ -361,19 +419,20 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
     { label: "Payout Expected", value: money(totals.totalPayout), featured: false },
     { label: "Total Spent", value: money(totals.totalSpent), featured: false },
     { label: "Total Cashback", value: money(totals.totalCashback), featured: false },
-    { label: "Tracking Received", value: orders.filter((order) => order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)).length.toString(), featured: false },
+    { label: "Tracking Received from Member", value: orders.filter((order) => order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)).length.toString(), featured: false },
     { label: "Waiting Scan", value: orders.filter((order) => (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.scanned)).length.toString(), featured: false },
     { label: "Members To Pay", value: orders.filter((order) => (order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid)).length.toString(), featured: false }
   ];
   const memberMetrics = [
     { label: "My Open Orders", value: totals.openOrders.toString(), featured: true },
     { label: "Amount Owed To Me", value: money(totals.amountOwed), featured: true },
-    { label: "Tracking Needed", value: orders.filter((order) => !order.trackingNumber).length.toString(), featured: false },
-    { label: "Tracking Sent", value: orders.filter((order) => order.memberSubmittedTrackingToAdmin || order.trackingNumber).length.toString(), featured: false },
+    { label: "Ordered / Tracking Needed", value: orders.filter((order) => !order.trackingNumber).length.toString(), featured: false },
+    { label: "Tracking Sent to Admin", value: orders.filter((order) => order.memberSubmittedTrackingToAdmin || order.trackingNumber).length.toString(), featured: false },
     { label: "Delivered", value: orders.filter((order) => order.memberMarkedDelivered || order.delivered).length.toString(), featured: false },
     { label: "Paid", value: orders.filter((order) => order.adminPaidMember || order.memberPaid || order.profitReceived).length.toString(), featured: false }
   ];
   const metrics = isAdmin ? adminMetrics : memberMetrics;
+  const dashboardQueues = isAdmin ? adminStages.slice(1) : memberStages.slice(1);
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
@@ -400,17 +459,17 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
             <button onClick={() => setSection("orders")} className="text-sm text-blue-300">Open orders</button>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
-            {stages.slice(1, 8).map((item) => (
+            {dashboardQueues.map((item) => (
               <button
                 key={item.key}
                 onClick={() => {
-                  setStage(item.key as OrderStage);
+                  setStage(item.key);
                   setSection("orders");
                 }}
-                className={cls("flex items-center justify-between rounded-lg border px-4 py-3 text-left hover:shadow-neon", stageTone[item.key as OrderStage])}
+                className={cls("flex items-center justify-between rounded-lg border px-4 py-3 text-left hover:shadow-neon", stageTone[stageToneKey(item.key)])}
               >
                 <span>{item.label}</span>
-                <span className="rounded-md bg-black/25 px-2 py-1 text-xs text-white">{orders.filter((order) => order.currentStage === item.key).length}</span>
+                <span className="rounded-md bg-black/25 px-2 py-1 text-xs text-white">{orders.filter((order) => isAdmin ? matchesAdminStage(order, item.key) : matchesMemberStage(order, item.key)).length}</span>
               </button>
             ))}
           </div>
@@ -556,9 +615,9 @@ function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers,
   warehouses: Warehouse[];
   workspaceMembers: WorkspaceMemberItem[];
   isAdmin: boolean;
-  counts: Map<OrderStage | "ALL", number>;
-  stage: OrderStage | "ALL";
-  setStage: (value: OrderStage | "ALL") => void;
+  counts: Map<StageFilter, number>;
+  stage: StageFilter;
+  setStage: (value: StageFilter) => void;
   query: string;
   setQuery: (value: string) => void;
   accountFilter: string;
@@ -571,20 +630,22 @@ function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers,
   setMemberFilter: (value: string) => void;
   setSelectedOrder: (order: OrderWithRelations) => void;
 }) {
+  const workflowTabs = isAdmin ? adminStages : memberStages;
   return (
     <section>
       <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-wrap gap-2">
-          {stages.map((item) => (
+          {workflowTabs.map((item) => (
             <button
               key={item.key}
               onClick={() => setStage(item.key)}
               className={cls(
                 "rounded-lg border px-3 py-2 text-sm",
                 stage === item.key
-                  ? item.key === "ALL" ? "border-cyan/40 bg-cyan/20 text-cyan shadow-neon" : stageTone[item.key as OrderStage]
+                  ? item.key === "ALL" ? "border-cyan/40 bg-cyan/20 text-cyan shadow-neon" : stageTone[stageToneKey(item.key)]
                   : "border-line bg-panel/80 text-muted hover:border-cyan/30 hover:text-white"
               )}
+              title={item.label}
             >
               {item.short} <span className="ml-1 text-xs opacity-70">{counts.get(item.key) ?? 0}</span>
             </button>
@@ -602,17 +663,17 @@ function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers,
   );
 }
 
-function OrderQueueCard({ order, stage, onOpen, isAdmin = false, memberSafe = false }: { order: OrderWithRelations; stage: OrderStage | "ALL"; onOpen: () => void; isAdmin?: boolean; memberSafe?: boolean }) {
+function OrderQueueCard({ order, stage, onOpen, isAdmin = false, memberSafe = false }: { order: OrderWithRelations; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; memberSafe?: boolean }) {
   const financials = calculateFinancials(order);
-  const displayStage = stage === "ALL" ? order.currentStage : stage;
+  const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
   const statusFields: Array<[string, string]> = isAdmin ? [
     ["Submitted by", memberName(order)],
     ["Member email", order.submittedBy?.email ?? "Unknown"],
     ["Tracking", order.trackingNumber ?? "Missing"],
-    ["Member tracking", order.memberSubmittedTrackingToAdmin || order.trackingNumber ? "Received" : "Needed"],
-    ["Warehouse submission", order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted" : "Not submitted"],
-    ["Member delivery", order.memberMarkedDelivered || order.delivered ? "Delivered" : "Not delivered"],
-    ["Warehouse scan", order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned ? "Scanned" : "Not scanned"],
+    ["Member tracking", order.memberSubmittedTrackingToAdmin || order.trackingNumber ? "Received from member" : "Waiting for member tracking"],
+    ["Warehouse submission", order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted to warehouse" : "Not submitted to warehouse"],
+    ["Member delivery", order.memberMarkedDelivered || order.delivered ? "Delivered by member" : "Not delivered by member"],
+    ["Warehouse scan", order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned ? "Scanned by warehouse" : "Not scanned"],
     ["Warehouse payout", order.adminReceivedPayoutFromWarehouse || order.paidOut ? "Received" : "Open"],
     ["Paid to member", order.adminPaidMember || order.memberPaid ? "Paid" : "Open"]
   ] : [
@@ -647,7 +708,7 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, memberSafe = fa
     TRACKING_SUBMITTED: [
       ["Tracking", order.trackingNumber ?? "Missing"],
       ["Destination", order.buyGroup?.name ?? order.warehouse?.code ?? "Missing"],
-      ["Submitted", shortDate(order.trackingSubmittedAt)],
+      ["Submitted to warehouse", shortDate(order.trackingSubmittedAt)],
       ["Delivered", order.delivered ? "Yes" : "No"]
     ],
     DELIVERED: [
@@ -664,7 +725,7 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, memberSafe = fa
       ["Payout", order.paidOut ? "Paid" : "Open"]
     ],
     PAID_OUT: [
-      ["Paid Out", shortDate(order.paidOutAt)],
+      ["Paid Out from Warehouse", shortDate(order.paidOutAt)],
       ["Amount Owed", money(financials.amountOwed)],
       ["Unrealized Profit", money(financials.profit)],
       ["Account", order.amazonAccount?.name ?? "Missing"],
@@ -673,13 +734,13 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, memberSafe = fa
     CREDIT_PAID: [
       ["Card Paid", shortDate(order.creditCardPaidAt)],
       ["Realized Profit", money(financials.profit)],
-      ["Profit Received", order.profitReceived ? "Yes" : "No"]
+      ["Done", order.profitReceived ? "Yes" : "No"]
     ],
     PROFIT_RECEIVED: [
       ["Realized Profit", money(financials.profit)],
       ["Total Paid", money(financials.totalPaid)],
       ["Total Payout", money(financials.totalPayout)],
-      ["Completed", shortDate(order.profitReceivedAt)],
+      ["Done", shortDate(order.profitReceivedAt)],
       ["Account", order.amazonAccount?.name ?? "Missing"],
       ["Group", order.buyGroup?.name ?? "Missing"]
     ]
@@ -710,14 +771,7 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, memberSafe = fa
 
 function StageActions({ order, onOpen, isAdmin }: { order: OrderWithRelations; onOpen: () => void; isAdmin: boolean }) {
   if (!isAdmin && !order.trackingNumber) {
-    return (
-      <form action={addTracking} className="flex min-w-72 items-center gap-2">
-        <input type="hidden" name="id" value={order.id} />
-        <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
-        <input name="trackingNumber" placeholder="Ex: TBA330706322941" onInput={(event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase(); }} className="min-w-0 flex-1 px-3 py-2 text-sm" />
-        <button className="rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon">Submit Tracking To Admin</button>
-      </form>
-    );
+    return <SubmitTrackingForm order={order} />;
   }
 
   const action = isAdmin
@@ -753,6 +807,50 @@ function StageActions({ order, onOpen, isAdmin }: { order: OrderWithRelations; o
       )}
       <button onClick={onOpen} className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Open</button>
     </div>
+  );
+}
+
+function SubmitTrackingForm({ order }: { order: OrderWithRelations }) {
+  const initialState: AddTrackingState = { error: null };
+  const [state, formAction] = useActionState(addTracking, initialState);
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [showClientError, setShowClientError] = useState(false);
+  const hasTrackingNumber = trackingNumber.trim().length > 0;
+  const showError = showClientError || !!state.error;
+  const errorMessage = showClientError ? "Tracking number required." : state.error;
+
+  return (
+    <form
+      action={formAction}
+      onSubmit={(event) => {
+        if (!hasTrackingNumber) {
+          event.preventDefault();
+          setShowClientError(true);
+        }
+      }}
+      className="min-w-72"
+    >
+      <div className="flex items-start gap-2">
+        <input type="hidden" name="id" value={order.id} />
+        <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+        <div className="min-w-0 flex-1">
+          <input
+            name="trackingNumber"
+            value={trackingNumber}
+            placeholder="Ex: TBA330706322941"
+            aria-invalid={showError}
+            aria-describedby={`tracking-error-${order.id}`}
+            onChange={(event) => {
+              setTrackingNumber(event.currentTarget.value.toUpperCase());
+              if (event.currentTarget.value.trim()) setShowClientError(false);
+            }}
+            className={cls("w-full px-3 py-2 text-sm", showError && "border-red-400/70 bg-red-500/10")}
+          />
+          {showError && <div id={`tracking-error-${order.id}`} className="mt-1 text-xs text-red-200">{errorMessage}</div>}
+        </div>
+        <button className="rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon">Submit Tracking To Admin</button>
+      </div>
+    </form>
   );
 }
 
@@ -825,8 +923,8 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
             <Fact label="Member email" value={order.submittedBy?.email ?? "Unknown"} />
             <Fact label="Workspace" value={workspaceName} />
             <Fact label="Member status" value={memberStatus ?? "Unknown"} />
-            <Fact label="Member tracking" value={order.memberSubmittedTrackingToAdmin || order.trackingNumber ? "Sent to admin" : "Needed"} />
-            {isAdmin && <Fact label="Warehouse submission" value={order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted" : "Not submitted"} />}
+            <Fact label="Member tracking" value={order.memberSubmittedTrackingToAdmin || order.trackingNumber ? "Sent to admin" : "Ordered / tracking needed"} />
+            {isAdmin && <Fact label="Warehouse submission" value={order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted to warehouse" : "Not submitted to warehouse"} />}
             <Fact label="Member delivered" value={yesNo(order.memberMarkedDelivered || order.delivered)} />
             <Fact label="Warehouse scanned" value={yesNo(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned)} />
             {isAdmin && <Fact label="Warehouse paid admin" value={yesNo(order.adminReceivedPayoutFromWarehouse || order.buyGroupPaidAdmin || order.paidOut)} />}
@@ -1006,18 +1104,17 @@ function WarehousesView({ warehouses, orders }: { warehouses: Warehouse[]; order
   );
 }
 
-function OperatorQueues({ orders, setStage, setSection }: { orders: OrderWithRelations[]; setStage: (value: OrderStage | "ALL") => void; setSection: (value: string) => void }) {
+function OperatorQueues({ orders, setStage, setSection }: { orders: OrderWithRelations[]; setStage: (value: StageFilter) => void; setSection: (value: string) => void }) {
   const queues = [
-    ["New Member Orders", orders.filter((order) => !order.trackingNumber)],
     ["Waiting for Member Tracking", orders.filter((order) => !order.trackingNumber)],
-    ["Tracking Received From Member", orders.filter((order) => order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted))],
-    ["Submitted To Warehouse", orders.filter((order) => order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)],
-    ["Delivered By Member", orders.filter((order) => order.memberMarkedDelivered || order.delivered)],
+    ["Tracking Received from Member", orders.filter((order) => order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted))],
+    ["Submitted to Warehouse", orders.filter((order) => order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)],
+    ["Delivered by Member", orders.filter((order) => order.memberMarkedDelivered || order.delivered)],
     ["Waiting For Warehouse Scan", orders.filter((order) => (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned))],
-    ["Scanned By Warehouse", orders.filter((order) => order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned)],
-    ["Paid Out From Warehouse", orders.filter((order) => (order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid))],
-    ["Paid To Member", orders.filter((order) => order.adminPaidMember || order.memberPaid)],
-    ["Complete", orders.filter((order) => order.adminPaidMember || order.memberPaid || order.profitReceived)]
+    ["Scanned by Warehouse", orders.filter((order) => order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned)],
+    ["Paid Out from Warehouse", orders.filter((order) => (order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid))],
+    ["Paid to Member", orders.filter((order) => order.adminPaidMember || order.memberPaid)],
+    ["Done", orders.filter((order) => order.adminPaidMember || order.memberPaid || order.profitReceived)]
   ] as const;
 
   return (
@@ -1028,7 +1125,7 @@ function OperatorQueues({ orders, setStage, setSection }: { orders: OrderWithRel
           onClick={() => {
             if (label.includes("Tracking Received")) setStage("TRACKING_READY");
             else if (label.includes("Submitted")) setStage("TRACKING_SUBMITTED");
-            else if (label.includes("Complete")) setStage("PROFIT_RECEIVED");
+            else if (label.includes("Done")) setStage("PROFIT_RECEIVED");
             else setStage("ALL");
             setSection("orders");
           }}
@@ -1121,7 +1218,7 @@ function TrackingNeededView({ orders }: { orders: OrderWithRelations[] }) {
   return (
     <div className="space-y-3">
       {trackingNeeded.map((order) => <OrderQueueCard key={order.id} order={order} stage="ALL" isAdmin={false} memberSafe onOpen={() => undefined} />)}
-      {trackingNeeded.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">No orders need tracking.</div>}
+      {trackingNeeded.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">No ordered items need tracking.</div>}
     </div>
   );
 }
