@@ -14,7 +14,7 @@ export default async function Home({ searchParams }: Props) {
   const context = await getWorkspaceContext(params.workspace);
   const workspaceWhere = { workspaceId: context.activeWorkspace.id };
   const orderWhere = orderVisibilityWhere(context);
-  const [orders, accounts, buyGroups, warehouses] = await Promise.all([
+  const [orders, accounts, buyGroups, warehouses, workspaceMembers] = await Promise.all([
     prisma.order.findMany({
       where: orderWhere,
       orderBy: [{ updatedAt: "desc" }],
@@ -22,7 +22,14 @@ export default async function Home({ searchParams }: Props) {
     }),
     prisma.amazonAccount.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
     prisma.buyGroup.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
-    prisma.warehouse.findMany({ where: workspaceWhere, orderBy: { name: "asc" } })
+    prisma.warehouse.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
+    context.isAdmin
+      ? prisma.workspaceMember.findMany({
+          where: { workspaceId: context.activeWorkspace.id },
+          include: { profile: true },
+          orderBy: [{ role: "asc" }, { createdAt: "asc" }]
+        })
+      : Promise.resolve([])
   ]);
 
   const reminders = buildReminders(orders);
@@ -73,6 +80,15 @@ export default async function Home({ searchParams }: Props) {
       }}
       profileId={context.profile.id}
       isAdmin={context.isAdmin}
+      workspaceMembers={workspaceMembers.map((membership) => ({
+        id: membership.id,
+        profileId: membership.profileId,
+        role: membership.role,
+        status: membership.status,
+        joinedAt: membership.joinedAt?.toISOString() ?? null,
+        name: membership.profile.name,
+        email: membership.profile.email
+      }))}
     />
   );
 }

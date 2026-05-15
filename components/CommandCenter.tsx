@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, OrderStage, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
 import { Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOrder, deleteOrder, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder } from "@/app/actions";
+import { addTracking, createAmazonAccount, createBuyGroup, createOrder, deleteOrder, quickAction, setAccountDefaultDueDays, setOrderBuyGroup, updateOrder, updateWorkspaceMemberStatus } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels, stages } from "@/lib/domain";
 
@@ -28,6 +28,7 @@ type Props = {
   isAdmin: boolean;
   activeWorkspace: WorkspaceSwitcherItem;
   workspaces: WorkspaceSwitcherItem[];
+  workspaceMembers: WorkspaceMemberItem[];
 };
 
 type WorkspaceSwitcherItem = {
@@ -36,6 +37,16 @@ type WorkspaceSwitcherItem = {
   type: WorkspaceType;
   role: WorkspaceRole;
   inviteCode: string;
+};
+
+type WorkspaceMemberItem = {
+  id: string;
+  profileId: string;
+  role: WorkspaceRole;
+  status: string;
+  joinedAt: string | null;
+  name: string | null;
+  email: string;
 };
 
 const nav = [
@@ -114,7 +125,7 @@ function reminderTone(severity: Reminder["severity"]) {
   return "border-slate-500/40 bg-slate-500/10";
 }
 
-export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, totals, userEmail, activeWorkspace, workspaces, profileId, isAdmin }: Props) {
+export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, totals, userEmail, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const [section, setSection] = useState<string>("dashboard");
   const [stage, setStage] = useState<OrderStage | "ALL">("ORDERED");
@@ -236,7 +247,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
           {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} />}
           {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
           {section === "queues" && <OperatorQueues orders={orders} setStage={setStage} setSection={setSection} />}
-          {section === "members" && <MembersView activeWorkspace={activeWorkspace} orders={orders} />}
+          {section === "members" && <MembersView activeWorkspace={activeWorkspace} orders={orders} workspaceMembers={workspaceMembers} profileId={profileId} />}
           {section === "memberPayouts" && <MemberPayoutsView orders={orders} activeWorkspace={activeWorkspace} />}
           {section === "trackingNeeded" && <TrackingNeededView orders={orders} />}
           {section === "myPayouts" && <MyPayoutsView orders={orders} />}
@@ -845,7 +856,7 @@ function OperatorQueues({ orders, setStage, setSection }: { orders: OrderWithRel
   );
 }
 
-function MembersView({ activeWorkspace, orders }: { activeWorkspace: WorkspaceSwitcherItem; orders: OrderWithRelations[] }) {
+function MembersView({ activeWorkspace, orders, workspaceMembers, profileId }: { activeWorkspace: WorkspaceSwitcherItem; orders: OrderWithRelations[]; workspaceMembers: WorkspaceMemberItem[]; profileId: string }) {
   const members = groupOrdersByMember(orders);
   return (
     <div className="space-y-4">
@@ -857,15 +868,34 @@ function MembersView({ activeWorkspace, orders }: { activeWorkspace: WorkspaceSw
         </div>
       </section>
       <SummaryGrid>
-        {members.map((member) => (
+        {workspaceMembers.map((member) => {
+          const summary = members.find((item) => item.id === member.profileId);
+          return (
           <div key={member.id} className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
-            <h2 className="font-semibold">{member.name}</h2>
-            <Fact label="Orders" value={String(member.orders.length)} />
-            <Fact label="Unpaid owed" value={money(member.unpaid)} />
-            <Fact label="Paid" value={money(member.paid)} />
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-semibold">{member.name ?? member.email}</h2>
+                <div className="mt-1 text-xs text-muted">{member.email}</div>
+              </div>
+              <span className="rounded-md border border-line px-2 py-1 text-xs text-muted">{member.role}</span>
+            </div>
+            <Fact label="Status" value={member.status} />
+            <Fact label="Orders" value={String(summary?.orders.length ?? 0)} />
+            <Fact label="Unpaid owed" value={money(summary?.unpaid ?? 0)} />
+            <Fact label="Paid" value={money(summary?.paid ?? 0)} />
+            {member.role !== "OWNER" || member.profileId !== profileId ? (
+              <form action={updateWorkspaceMemberStatus} className="mt-3">
+                <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
+                <input type="hidden" name="memberId" value={member.id} />
+                <input type="hidden" name="status" value={member.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE"} />
+                <button className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-white">
+                  {member.status === "ACTIVE" ? "Suspend" : "Reactivate"}
+                </button>
+              </form>
+            ) : null}
           </div>
-        ))}
-        {members.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-muted">No member-submitted orders yet.</div>}
+        );})}
+        {workspaceMembers.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-muted">No members yet.</div>}
       </SummaryGrid>
     </div>
   );

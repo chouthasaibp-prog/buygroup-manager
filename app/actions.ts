@@ -377,6 +377,33 @@ export async function setOrderBuyGroup(formData: FormData) {
   revalidatePath("/");
 }
 
+export async function updateWorkspaceMemberStatus(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  if (!context.isAdmin) throw new Error("Only workspace admins can manage members.");
+
+  const memberId = String(formData.get("memberId") ?? "");
+  const status = String(formData.get("status") ?? "");
+  if (!memberId || !["ACTIVE", "SUSPENDED"].includes(status)) return;
+
+  const member = await prisma.workspaceMember.findFirstOrThrow({
+    where: {
+      id: memberId,
+      workspaceId: context.activeWorkspace.id
+    }
+  });
+
+  if (member.role === "OWNER" && member.profileId === context.profile.id) {
+    throw new Error("Owners cannot suspend themselves.");
+  }
+
+  await prisma.workspaceMember.update({
+    where: { id: memberId },
+    data: { status: status as "ACTIVE" | "SUSPENDED" }
+  });
+
+  revalidatePath("/");
+}
+
 export async function exportOrdersCsv() {
   // Placeholder seam for file-based exports. The UI currently exposes the v1 scope;
   // future work can stream a generated CSV from a route handler.
