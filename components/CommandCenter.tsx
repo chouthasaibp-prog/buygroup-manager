@@ -148,6 +148,7 @@ const operatorMemberNav = [
   { key: "dashboard", label: "My Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "My Orders", icon: Package },
   { key: "trackingNeeded", label: "Ordered / Tracking Needed", icon: Upload },
+  { key: "accounts", label: "Credit Owed", icon: CreditCard },
   { key: "myPayouts", label: "My Payouts", icon: CreditCard },
   { key: "settings", label: "Settings", icon: Settings }
 ] as const;
@@ -1127,6 +1128,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
   const financials = calculateFinancials(order);
   const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
   const workflowSteps = buildWorkflowSteps(order, viewMode);
+  const memberOwed = order.memberPayoutAmount ?? financials.amountOwed;
   const statusFields: Array<[string, string]> = viewMode === "personal" ? [
     ["Status", personalWorkflowLabel(order)],
     ["Tracking", order.trackingNumber ?? "Missing"],
@@ -1152,6 +1154,16 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Scanned", order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned ? "Yes" : "No"],
     ["Payment", order.memberConfirmedPayment ? "Credit owed" : order.adminPaidMember || order.memberPaid ? "Sent" : "Open"]
   ];
+  const moneyFields: Array<[string, string]> = viewMode === "personal" && stage === "PAID_OUT" ? [
+    ["Credit / Amount Owed", money(financials.amountOwed)]
+  ] : viewMode === "member" && stage === "MEMBER_PAYMENT_CONFIRMED" ? [
+    ["Credit / Amount Owed", money(financials.amountOwed)]
+  ] : viewMode === "admin" && stage === "PAID_OUT" ? [
+    ["Member", memberName(order)],
+    ["Warehouse payout", money(financials.totalPayout)],
+    ["Owed to member", money(memberOwed)],
+    ["Paid to member", order.adminPaidMember || order.memberPaid ? "Yes" : "No"]
+  ] : [];
   const fieldsByStage: Record<OrderStage, Array<[string, string]>> = {
     ORDERED: [
       ...(memberSafe ? [] : [["Submitted by", memberName(order)], ["Member email", order.submittedBy?.email ?? "Unknown"]] as Array<[string, string]>),
@@ -1227,6 +1239,11 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
           <div className="mt-3 flex flex-wrap gap-2">
             {(isAdmin || viewMode === "personal" ? statusFields : statusFields.concat(fieldsByStage[displayStage as OrderStage].slice(1, 5))).map(([label, value]) => (
               <span key={label} className="rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
+                {label}: <span className="text-white">{value}</span>
+              </span>
+            ))}
+            {moneyFields.map(([label, value]) => (
+              <span key={label} className="rounded-md border border-green-300/25 bg-green-500/10 px-2.5 py-1.5 text-xs text-green-100">
                 {label}: <span className="text-white">{value}</span>
               </span>
             ))}
@@ -1606,7 +1623,12 @@ function creditStatus(order: OrderWithRelations, viewMode: WorkflowViewMode) {
 
 function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations[]; viewMode: WorkflowViewMode }) {
   const rows = orders
-    .filter((order) => viewMode === "personal" ? !order.creditCardPaid : !(order.memberMarkedDone || order.profitReceived))
+    .filter((order) => viewMode === "personal"
+      ? order.paidOut && !order.creditCardPaid
+      : viewMode === "member"
+        ? order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived)
+        : !(order.adminPaidMember || order.memberPaid)
+    )
     .map((order) => ({ order, financials: calculateFinancials(order) }));
   const totalOwed = rows.reduce((sum, item) => sum + item.financials.amountOwed, 0);
 
@@ -1614,7 +1636,7 @@ function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations
     <section className="rounded-lg border border-slate-400/30 bg-panel/80 p-4 shadow-glow">
       <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
-          <div className="text-xs uppercase tracking-[.12em] text-muted">{viewMode === "personal" ? "Credit Owed" : "Credit / Amount Owed"}</div>
+          <div className="text-xs uppercase tracking-[.12em] text-muted">{viewMode === "member" ? "Credit Owed To Bank/Card" : viewMode === "personal" ? "Credit Owed" : "Credit / Amount Owed"}</div>
           <div className="mt-1 text-3xl font-semibold text-white">{money(totalOwed)}</div>
         </div>
         <div className="text-sm text-muted">{rows.length} open {rows.length === 1 ? "order" : "orders"}</div>
@@ -1814,31 +1836,67 @@ function MembersView({ activeWorkspace, orders, workspaceMembers, profileId }: {
 
 function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWorkspace: WorkspaceSwitcherItem }) {
   const members = groupOrdersByMember(orders);
+  const openOrders = orders.filter((order) => !(order.adminPaidMember || order.memberPaid));
+  const paidOrders = orders.filter((order) => order.adminPaidMember || order.memberPaid);
+  const totalOwed = openOrders.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculateFinancials(order).amountOwed), 0);
+  const totalPaid = paidOrders.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculateFinancials(order).amountOwed), 0);
+
   return (
     <div className="space-y-4">
+      <section className="rounded-lg border border-green-400/25 bg-panel/80 p-4 shadow-glow">
+        <div className="grid gap-3 md:grid-cols-3">
+          <div>
+            <div className="text-xs uppercase tracking-[.12em] text-muted">Total Owed To Members</div>
+            <div className="mt-1 text-3xl font-semibold text-white">{money(totalOwed)}</div>
+          </div>
+          <Fact label="Open Member Orders" value={String(openOrders.length)} />
+          <Fact label="Paid To Members" value={money(totalPaid)} />
+        </div>
+      </section>
       {members.map((member) => (
         <div key={member.id} className="rounded-lg border border-green-400/20 bg-panel/80 p-4 shadow-glow">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="font-semibold">{member.name}</h2>
-            <div className="text-right text-sm text-muted">Unpaid <span className="font-semibold text-white">{money(member.unpaid)}</span></div>
+            <div>
+              <h2 className="font-semibold">{member.name}</h2>
+              <div className="mt-1 text-xs text-muted">{member.orders.length} {member.orders.length === 1 ? "order" : "orders"}</div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 text-right text-sm">
+              <span className="rounded-md border border-green-300/25 bg-green-500/10 px-2.5 py-1.5 text-green-100">Owed {money(member.unpaid)}</span>
+              <span className="rounded-md border border-line px-2.5 py-1.5 text-muted">Paid {money(member.paid)}</span>
+            </div>
           </div>
           <div className="space-y-2">
-            {member.orders.filter((order) => !(order.adminPaidMember || order.memberPaid)).map((order) => (
-              <form key={order.id} action={quickAction} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface/60 px-3 py-2">
-                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
-                <input type="hidden" name="id" value={order.id} />
-                <input type="hidden" name="action" value="memberPaid" />
-                <span className="text-sm">{order.itemName}</span>
-                <span className="text-sm text-muted">{money(order.memberPayoutAmount ?? calculateFinancials(order).amountOwed)}</span>
-                <button className="rounded-md border border-green-400/40 px-2.5 py-1.5 text-xs text-green-100">Mark Paid</button>
-              </form>
-            ))}
-            {member.orders.filter((order) => (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment).map((order) => (
-              <div key={`${order.id}-pending-confirmation`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-300/25 bg-blue-500/10 px-3 py-2">
-                <span className="text-sm">{order.itemName}</span>
-                <span className="text-xs text-blue-100">Awaiting member confirmation</span>
-              </div>
-            ))}
+            {member.orders.map((order) => {
+              const financials = calculateFinancials(order);
+              const owedToMember = order.memberPayoutAmount ?? financials.amountOwed;
+              const paidToMember = order.adminPaidMember || order.memberPaid;
+              const status = paidToMember
+                ? order.memberConfirmedPayment ? "Confirmed by member" : "Paid, awaiting confirmation"
+                : "Owed to member";
+
+              return (
+                <div key={order.id} className="grid gap-3 rounded-lg border border-line bg-surface/60 px-3 py-3 text-sm lg:grid-cols-[1.4fr_repeat(4,minmax(120px,.65fr))_auto] lg:items-center">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-white">{order.itemName}</div>
+                    <div className="mt-0.5 truncate text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
+                  </div>
+                  <Fact label="Total paid" value={money(financials.totalPaid)} />
+                  <Fact label="Cashback" value={money(financials.totalCashback)} />
+                  <Fact label="Owed to member" value={money(owedToMember)} />
+                  <Fact label="Status" value={status} />
+                  {!paidToMember ? (
+                    <form action={quickAction}>
+                      <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                      <input type="hidden" name="id" value={order.id} />
+                      <input type="hidden" name="action" value="memberPaid" />
+                      <button className="rounded-md border border-green-400/40 px-2.5 py-1.5 text-xs text-green-100">Mark Paid</button>
+                    </form>
+                  ) : (
+                    <span className="rounded-md border border-blue-300/25 bg-blue-500/10 px-2.5 py-1.5 text-xs text-blue-100">{order.memberConfirmedPayment ? "Confirmed" : "Awaiting confirm"}</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}
