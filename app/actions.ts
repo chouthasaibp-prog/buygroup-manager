@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { calculateFinancials, deriveStage } from "@/lib/domain";
 import { createWorkspaceForProfile, ensureProfile, requireWorkspaceActionContext } from "@/lib/workspace";
+import type { Order, OrderStage, WorkspaceType } from "@prisma/client";
 
 const boolFromForm = (formData: FormData, key: string) => formData.get(key) === "on" || formData.get(key) === "true";
 const numberFromForm = (formData: FormData, key: string, fallback = 0) => Number(formData.get(key) || fallback);
@@ -66,16 +67,29 @@ async function destinationIdForBuyGroup(workspaceId: string, buyGroupId: string 
   return warehouse.id;
 }
 
+function deriveWorkspaceStage(order: Order, workspaceType: WorkspaceType): OrderStage {
+  if (workspaceType !== "PERSONAL") return deriveStage(order);
+  if (order.profitReceived) return "PROFIT_RECEIVED";
+  if (order.creditCardPaid) return "CREDIT_PAID";
+  if (order.paidOut) return "PAID_OUT";
+  if (order.scanned) return "SCANNED";
+  if (order.delivered) return "DELIVERED";
+  if (order.trackingSubmitted || order.trackingNumber?.trim()) return "TRACKING_SUBMITTED";
+  return "ORDERED";
+}
+
 async function deriveStagePatch(workspaceId: string, orderId: string) {
   const order = await prisma.order.findFirstOrThrow({ where: { id: orderId, workspaceId } });
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { type: true } });
   await prisma.order.update({
     where: { id: orderId },
-    data: { currentStage: deriveStage(order) }
+    data: { currentStage: deriveWorkspaceStage(order, workspace.type) }
   });
 }
 
 export async function createOrder(formData: FormData) {
   const context = await requireWorkspaceActionContext(formData);
+  const isPersonal = context.activeWorkspace.type === "PERSONAL";
   const workspaceId = context.activeWorkspace.id;
   const chaseValue = String(formData.get("chaseCashbackPercent") ?? "0");
   const chaseCashbackPercent = chaseValue === "custom" ? numberFromForm(formData, "customChaseCashbackPercent") : Number(chaseValue);
@@ -101,8 +115,10 @@ export async function createOrder(formData: FormData) {
       orderNumber: optionalAmazonOrderNumber(formData),
       trackingNumber,
       trackingAddedAt: trackingNumber ? new Date() : null,
-      memberSubmittedTrackingToAdmin: !!trackingNumber,
-      memberSubmittedTrackingToAdminAt: trackingNumber ? new Date() : null,
+      trackingSubmitted: isPersonal && !!trackingNumber,
+      trackingSubmittedAt: isPersonal && trackingNumber ? new Date() : null,
+      memberSubmittedTrackingToAdmin: !isPersonal && !!trackingNumber,
+      memberSubmittedTrackingToAdminAt: !isPersonal && trackingNumber ? new Date() : null,
       notes: optionalString(formData, "notes"),
       amazonAccountId,
       buyGroupId,
@@ -117,6 +133,7 @@ export async function createOrder(formData: FormData) {
 export async function updateOrder(formData: FormData) {
   const context = await requireWorkspaceActionContext(formData);
   const isOperatorAdmin = context.activeWorkspace.type === "OPERATOR" && context.isAdmin;
+  const isPersonal = context.activeWorkspace.type === "PERSONAL";
   const workspaceId = context.activeWorkspace.id;
   const id = String(formData.get("id"));
   const existing = await prisma.order.findFirstOrThrow({
@@ -128,18 +145,24 @@ export async function updateOrder(formData: FormData) {
   });
   const formTrackingNumber = optionalAmazonTrackingNumber(formData);
   const trackingNumber = isOperatorAdmin ? existing.trackingNumber : formTrackingNumber;
-  const memberSubmittedTrackingToAdmin = !!trackingNumber && (existing.memberSubmittedTrackingToAdmin || (!isOperatorAdmin && !!formTrackingNumber));
-  const memberMarkedDelivered = isOperatorAdmin ? existing.memberMarkedDelivered : (!!trackingNumber && boolFromForm(formData, "memberMarkedDelivered"));
+  const personalTrackingSubmitted = isPersonal ? !!trackingNumber && (boolFromForm(formData, "trackingSubmitted") || !!formTrackingNumber || existing.trackingSubmitted) : existing.trackingSubmitted;
+  const personalDelivered = isPersonal ? boolFromForm(formData, "delivered") : existing.delivered;
+  const personalScanned = isPersonal ? boolFromForm(formData, "scanned") : existing.scanned;
+  const personalPaidOut = isPersonal ? boolFromForm(formData, "paidOut") : existing.paidOut;
+  const personalCreditCardPaid = isPersonal ? boolFromForm(formData, "creditCardPaid") : existing.creditCardPaid;
+  const personalProfitReceived = isPersonal ? boolFromForm(formData, "profitReceived") : existing.profitReceived;
+  const memberSubmittedTrackingToAdmin = !isPersonal && !!trackingNumber && (existing.memberSubmittedTrackingToAdmin || (!isOperatorAdmin && !!formTrackingNumber));
+  const memberMarkedDelivered = !isPersonal && (isOperatorAdmin ? existing.memberMarkedDelivered : (!!trackingNumber && boolFromForm(formData, "memberMarkedDelivered")));
   const adminSubmittedTrackingToWarehouse = isOperatorAdmin ? boolFromForm(formData, "adminSubmittedTrackingToWarehouse") : existing.adminSubmittedTrackingToWarehouse;
   const adminMarkedScannedByWarehouse = isOperatorAdmin ? boolFromForm(formData, "adminMarkedScannedByWarehouse") : existing.adminMarkedScannedByWarehouse;
   const adminReceivedPayoutFromWarehouse = isOperatorAdmin ? boolFromForm(formData, "adminReceivedPayoutFromWarehouse") : existing.adminReceivedPayoutFromWarehouse;
   const adminPaidMember = isOperatorAdmin ? boolFromForm(formData, "adminPaidMember") : existing.adminPaidMember;
-  const trackingSubmitted = adminSubmittedTrackingToWarehouse;
-  const delivered = memberMarkedDelivered;
-  const scanned = adminMarkedScannedByWarehouse;
-  const paidOut = adminReceivedPayoutFromWarehouse;
-  const creditCardPaid = adminPaidMember;
-  const profitReceived = adminPaidMember;
+  const trackingSubmitted = isPersonal ? personalTrackingSubmitted : adminSubmittedTrackingToWarehouse;
+  const delivered = isPersonal ? personalDelivered : memberMarkedDelivered;
+  const scanned = isPersonal ? personalScanned : adminMarkedScannedByWarehouse;
+  const paidOut = isPersonal ? personalPaidOut : adminReceivedPayoutFromWarehouse;
+  const creditCardPaid = isPersonal ? personalCreditCardPaid : adminPaidMember;
+  const profitReceived = isPersonal ? personalProfitReceived : adminPaidMember;
   const chaseValue = String(formData.get("chaseCashbackPercent") ?? existing.chaseCashbackPercent);
   const chaseCashbackPercent = chaseValue === "custom" ? numberFromForm(formData, "customChaseCashbackPercent") : Number(chaseValue);
   const buyGroupId = await requireWorkspaceBuyGroupId(workspaceId, optionalString(formData, "buyGroupId"));
@@ -160,7 +183,14 @@ export async function updateOrder(formData: FormData) {
       shippingType: optionalString(formData, "shippingType"),
       orderNumber: optionalAmazonOrderNumber(formData),
       trackingNumber,
-      ...(isOperatorAdmin ? {
+      ...(isPersonal ? {
+        trackingSubmitted,
+        delivered,
+        scanned,
+        paidOut,
+        creditCardPaid,
+        profitReceived
+      } : isOperatorAdmin ? {
         trackingSubmitted,
         scanned,
         paidOut,
@@ -191,7 +221,14 @@ export async function updateOrder(formData: FormData) {
         ? new Date(String(formData.get("manualCreditCardDueDate")))
         : null,
       trackingAddedAt: trackingNumber && !existing.trackingNumber ? new Date() : existing.trackingAddedAt,
-      ...(!isOperatorAdmin ? {
+      ...(isPersonal ? {
+        trackingSubmittedAt: trackingSubmitted && !existing.trackingSubmitted ? new Date() : existing.trackingSubmittedAt,
+        deliveredAt: delivered && !existing.delivered ? new Date() : existing.deliveredAt,
+        scannedAt: scanned && !existing.scanned ? new Date() : existing.scannedAt,
+        paidOutAt: paidOut && !existing.paidOut ? new Date() : existing.paidOutAt,
+        creditCardPaidAt: creditCardPaid && !existing.creditCardPaid ? new Date() : existing.creditCardPaidAt,
+        profitReceivedAt: profitReceived && !existing.profitReceived ? new Date() : existing.profitReceivedAt
+      } : !isOperatorAdmin ? {
         memberSubmittedTrackingToAdminAt: memberSubmittedTrackingToAdmin && !existing.memberSubmittedTrackingToAdmin ? new Date() : existing.memberSubmittedTrackingToAdminAt,
         deliveredAt: memberMarkedDelivered && !existing.delivered ? new Date() : existing.deliveredAt,
         memberMarkedDeliveredAt: memberMarkedDelivered && !existing.memberMarkedDelivered ? new Date() : existing.memberMarkedDeliveredAt
@@ -226,6 +263,7 @@ export async function addTracking(_previousState: AddTrackingState, formData: Fo
   try {
     const context = await requireWorkspaceActionContext(formData);
     const isOperatorAdmin = context.activeWorkspace.type === "OPERATOR" && context.isAdmin;
+    const isPersonal = context.activeWorkspace.type === "PERSONAL";
     const workspaceId = context.activeWorkspace.id;
     const id = String(formData.get("id") ?? "");
     if (isOperatorAdmin) {
@@ -248,8 +286,13 @@ export async function addTracking(_previousState: AddTrackingState, formData: Fo
       data: {
         trackingNumber,
         trackingAddedAt: trackingNumber && !existing.trackingNumber ? new Date() : existing.trackingAddedAt,
-        memberSubmittedTrackingToAdmin: true,
-        memberSubmittedTrackingToAdminAt: !existing.memberSubmittedTrackingToAdmin ? new Date() : existing.memberSubmittedTrackingToAdminAt
+        ...(isPersonal ? {
+          trackingSubmitted: true,
+          trackingSubmittedAt: !existing.trackingSubmitted ? new Date() : existing.trackingSubmittedAt
+        } : {
+          memberSubmittedTrackingToAdmin: true,
+          memberSubmittedTrackingToAdminAt: !existing.memberSubmittedTrackingToAdmin ? new Date() : existing.memberSubmittedTrackingToAdminAt
+        })
       }
     });
 
@@ -264,6 +307,7 @@ export async function addTracking(_previousState: AddTrackingState, formData: Fo
 export async function quickAction(formData: FormData) {
   const context = await requireWorkspaceActionContext(formData);
   const isOperatorAdmin = context.activeWorkspace.type === "OPERATOR" && context.isAdmin;
+  const isPersonal = context.activeWorkspace.type === "PERSONAL";
   const workspaceId = context.activeWorkspace.id;
   const id = String(formData.get("id"));
   const action = String(formData.get("action"));
@@ -278,15 +322,49 @@ export async function quickAction(formData: FormData) {
   const data = {} as Record<string, unknown>;
 
   const adminOnly = ["submitTracking", "submitToWarehouse", "confirmTrackingReceived", "scanned", "warehouseScanned", "warehousePaid", "paidOut", "cardPaid", "profitReceived", "snoozePayout", "memberPaid"];
+  const personalActions = ["submitTracking", "submitToWarehouse", "memberDelivered", "scanned", "warehouseScanned", "warehousePaid", "paidOut", "cardPaid", "profitReceived"];
   const memberOnly = ["memberDelivered"];
-  if (adminOnly.includes(action) && !isOperatorAdmin) {
+  if (isPersonal && !personalActions.includes(action)) {
     throw new Error("You do not have permission for this action.");
   }
-  if (memberOnly.includes(action) && (isOperatorAdmin || order.submittedByProfileId !== context.profile.id)) {
+  if (!isPersonal && adminOnly.includes(action) && !isOperatorAdmin) {
+    throw new Error("You do not have permission for this action.");
+  }
+  if (!isPersonal && memberOnly.includes(action) && (isOperatorAdmin || order.submittedByProfileId !== context.profile.id)) {
     throw new Error("Only the submitting member can perform this action.");
   }
 
-  if ((action === "submitTracking" || action === "submitToWarehouse") && order.trackingNumber) {
+  if (isPersonal) {
+    if ((action === "submitTracking" || action === "submitToWarehouse") && order.trackingNumber) {
+      data.trackingSubmitted = true;
+      data.trackingSubmittedAt = now;
+    }
+
+    if (action === "memberDelivered" && order.trackingNumber) {
+      data.delivered = true;
+      data.deliveredAt = now;
+    }
+
+    if ((action === "scanned" || action === "warehouseScanned") && order.delivered) {
+      data.scanned = true;
+      data.scannedAt = now;
+    }
+
+    if ((action === "paidOut" || action === "warehousePaid") && order.scanned) {
+      data.paidOut = true;
+      data.paidOutAt = now;
+    }
+
+    if (action === "cardPaid" && order.paidOut) {
+      data.creditCardPaid = true;
+      data.creditCardPaidAt = now;
+    }
+
+    if (action === "profitReceived" && order.creditCardPaid) {
+      data.profitReceived = true;
+      data.profitReceivedAt = now;
+    }
+  } else if ((action === "submitTracking" || action === "submitToWarehouse") && order.trackingNumber) {
     data.trackingSubmitted = true;
     data.trackingSubmittedAt = now;
     data.adminSubmittedTrackingToBuyGroup = true;
@@ -295,14 +373,14 @@ export async function quickAction(formData: FormData) {
     data.adminSubmittedTrackingToWarehouseAt = now;
   }
 
-  if (action === "memberDelivered" && order.trackingNumber) {
+  if (!isPersonal && action === "memberDelivered" && order.trackingNumber) {
     data.delivered = true;
     data.deliveredAt = now;
     data.memberMarkedDelivered = true;
     data.memberMarkedDeliveredAt = now;
   }
 
-  if ((action === "scanned" || action === "warehouseScanned") && (order.delivered || order.memberMarkedDelivered)) {
+  if (!isPersonal && (action === "scanned" || action === "warehouseScanned") && (order.delivered || order.memberMarkedDelivered)) {
     data.scanned = true;
     data.scannedAt = now;
     data.warehouseScanned = true;
@@ -311,7 +389,7 @@ export async function quickAction(formData: FormData) {
     data.adminMarkedScannedByWarehouseAt = now;
   }
 
-  if ((action === "paidOut" || action === "warehousePaid") && (order.scanned || order.adminMarkedScannedByWarehouse)) {
+  if (!isPersonal && (action === "paidOut" || action === "warehousePaid") && (order.scanned || order.adminMarkedScannedByWarehouse)) {
     data.paidOut = true;
     data.paidOutAt = now;
     data.buyGroupPaidAdmin = true;
@@ -320,17 +398,17 @@ export async function quickAction(formData: FormData) {
     data.adminReceivedPayoutFromWarehouseAt = now;
   }
 
-  if (action === "cardPaid" && (order.paidOut || order.adminReceivedPayoutFromWarehouse)) {
+  if (!isPersonal && action === "cardPaid" && (order.paidOut || order.adminReceivedPayoutFromWarehouse)) {
     data.creditCardPaid = true;
     data.creditCardPaidAt = now;
   }
 
-  if (action === "profitReceived" && order.creditCardPaid) {
+  if (!isPersonal && action === "profitReceived" && order.creditCardPaid) {
     data.profitReceived = true;
     data.profitReceivedAt = now;
   }
 
-  if (action === "memberPaid") {
+  if (!isPersonal && action === "memberPaid") {
     data.memberPaid = true;
     data.memberPaidAt = now;
     data.adminPaidMember = true;
@@ -342,7 +420,7 @@ export async function quickAction(formData: FormData) {
     data.memberPayoutAmount = order.memberPayoutAmount ?? calculateFinancials(order).amountOwed;
   }
 
-  if (action === "snoozePayout") {
+  if (!isPersonal && action === "snoozePayout") {
     const days = numberFromForm(formData, "days", 1);
     const snoozedUntil = new Date();
     snoozedUntil.setDate(snoozedUntil.getDate() + days);

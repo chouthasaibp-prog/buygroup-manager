@@ -77,6 +77,17 @@ const adminStages: Array<{ key: StageFilter; label: string; short: string }> = [
   { key: "ADMIN_DONE", label: "Done", short: "Done" }
 ];
 
+const personalStages: Array<{ key: StageFilter; label: string; short: string }> = [
+  { key: "ALL", label: "All", short: "All" },
+  { key: "ORDERED", label: "Ordered", short: "Ordered" },
+  { key: "TRACKING_SUBMITTED", label: "Tracking Submitted", short: "Tracking Submitted" },
+  { key: "DELIVERED", label: "Delivered", short: "Delivered" },
+  { key: "SCANNED", label: "Scanned", short: "Scanned" },
+  { key: "PAID_OUT", label: "Payout from Warehouse", short: "Payout from Warehouse" },
+  { key: "CREDIT_PAID", label: "Credit Paid to Credit Card", short: "Credit Paid" },
+  { key: "PROFIT_RECEIVED", label: "Done", short: "Done" }
+];
+
 const memberStages: Array<{ key: StageFilter; label: string; short: string }> = [
   { key: "ALL", label: "All", short: "All" },
   { key: "ORDERED", label: "Ordered / Tracking Needed", short: "Ordered / Tracking Needed" },
@@ -182,6 +193,16 @@ function memberWorkflowLabel(order: OrderWithRelations) {
   return "Ordered / Tracking Needed";
 }
 
+function personalWorkflowLabel(order: OrderWithRelations) {
+  if (order.profitReceived) return "Done";
+  if (order.creditCardPaid) return "Credit Paid";
+  if (order.paidOut) return "Payout from Warehouse";
+  if (order.scanned) return "Scanned";
+  if (order.delivered) return "Delivered";
+  if (order.trackingSubmitted || order.trackingNumber) return "Tracking Submitted";
+  return "Ordered";
+}
+
 function adminWorkflowLabel(order: OrderWithRelations) {
   if (order.adminPaidMember || order.memberPaid) return "Done";
   if (order.adminReceivedPayoutFromWarehouse || order.paidOut) return "Paid Out from Warehouse";
@@ -210,29 +231,29 @@ function buildPersonalWorkflowSteps(order: OrderWithRelations): WorkflowDateStep
     { label: "Ordered", completed: true, date: order.createdAt },
     {
       label: "Tracking submitted",
-      completed: order.adminSubmittedTrackingToWarehouse || order.adminSubmittedTrackingToBuyGroup || order.trackingSubmitted,
-      date: firstDate(order.adminSubmittedTrackingToWarehouseAt, order.adminSubmittedTrackingToBuyGroupAt, order.trackingSubmittedAt)
+      completed: order.trackingSubmitted || !!order.trackingNumber,
+      date: firstDate(order.trackingSubmittedAt, order.trackingAddedAt)
     },
     {
       label: "Delivered",
-      completed: order.memberMarkedDelivered || order.delivered,
-      date: firstDate(order.memberMarkedDeliveredAt, order.deliveredAt)
+      completed: order.delivered,
+      date: order.deliveredAt
     },
     {
       label: "Scanned",
-      completed: order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned,
-      date: firstDate(order.adminMarkedScannedByWarehouseAt, order.warehouseScannedAt, order.scannedAt)
+      completed: order.scanned,
+      date: order.scannedAt
     },
     {
       label: "Warehouse payout",
-      completed: order.adminReceivedPayoutFromWarehouse || order.buyGroupPaidAdmin || order.paidOut,
-      date: firstDate(order.adminReceivedPayoutFromWarehouseAt, order.buyGroupPaidAdminAt, order.paidOutAt)
+      completed: order.paidOut,
+      date: order.paidOutAt
     },
     { label: "Credit paid", completed: order.creditCardPaid, date: order.creditCardPaidAt },
     {
       label: "Done",
-      completed: order.profitReceived || order.adminPaidMember || order.memberPaid,
-      date: firstDate(order.profitReceivedAt, order.adminPaidMemberAt, order.memberPaidAt)
+      completed: order.profitReceived,
+      date: order.profitReceivedAt
     }
   ];
 }
@@ -315,6 +336,15 @@ function buildWorkflowSteps(order: OrderWithRelations, viewMode: WorkflowViewMod
   return buildMemberWorkflowSteps(order);
 }
 
+function actionButtonLabel(action: string, viewMode: WorkflowViewMode) {
+  if (viewMode !== "personal") return actionLabels[action];
+  if (action === "submitToWarehouse" || action === "submitTracking") return "Submit Tracking";
+  if (action === "warehousePaid" || action === "paidOut") return "Mark Payout Received";
+  if (action === "cardPaid") return "Mark Credit Paid";
+  if (action === "profitReceived") return "Mark Done";
+  return actionLabels[action];
+}
+
 function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilter) {
   if (selectedStage === "ALL") return true;
   if (selectedStage === "ORDERED") return !(order.memberSubmittedTrackingToAdmin || order.trackingNumber);
@@ -323,6 +353,18 @@ function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilte
   if (selectedStage === "SCANNED") return (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminPaidMember || order.memberPaid || order.profitReceived);
   if (selectedStage === "MEMBER_PAID") return order.adminPaidMember || order.memberPaid || order.profitReceived;
   if (selectedStage === "MEMBER_DONE") return order.adminPaidMember || order.memberPaid || order.profitReceived;
+  return order.currentStage === selectedStage;
+}
+
+function matchesPersonalStage(order: OrderWithRelations, selectedStage: StageFilter) {
+  if (selectedStage === "ALL") return true;
+  if (selectedStage === "ORDERED") return !(order.trackingSubmitted || order.trackingNumber);
+  if (selectedStage === "TRACKING_SUBMITTED") return (order.trackingSubmitted || !!order.trackingNumber) && !order.delivered;
+  if (selectedStage === "DELIVERED") return order.delivered && !order.scanned;
+  if (selectedStage === "SCANNED") return order.scanned && !order.paidOut;
+  if (selectedStage === "PAID_OUT") return order.paidOut && !order.creditCardPaid;
+  if (selectedStage === "CREDIT_PAID") return order.creditCardPaid && !order.profitReceived;
+  if (selectedStage === "PROFIT_RECEIVED") return order.profitReceived;
   return order.currentStage === selectedStage;
 }
 
@@ -349,6 +391,7 @@ function stageToneKey(stage: StageFilter): OrderStage {
 export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
+  const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
   const [section, setSection] = useState<string>("dashboard");
   const [stage, setStage] = useState<StageFilter>("ORDERED");
   const [query, setQuery] = useState("");
@@ -362,11 +405,11 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   const filteredOrders = useMemo(() => {
     const q = query.toLowerCase();
     return orders.filter((order) => {
-      const inStage = isOperatorAdmin ? matchesAdminStage(order, stage) : matchesMemberStage(order, stage);
+      const inStage = viewMode === "admin" ? matchesAdminStage(order, stage) : viewMode === "personal" ? matchesPersonalStage(order, stage) : matchesMemberStage(order, stage);
       const inAccount = accountFilter === "ALL" || order.amazonAccountId === accountFilter;
       const inBuyGroup = buyGroupFilter === "ALL" || order.buyGroupId === buyGroupFilter;
       const inWarehouse = warehouseFilter === "ALL" || order.warehouseId === warehouseFilter;
-      const inMember = memberFilter === "ALL" || order.submittedByProfileId === memberFilter;
+      const inMember = viewMode !== "admin" || memberFilter === "ALL" || order.submittedByProfileId === memberFilter;
       const matches =
         order.itemName.toLowerCase().includes(q) ||
         order.orderNumber?.toLowerCase().includes(q) ||
@@ -374,22 +417,23 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
         order.amazonAccount?.name.toLowerCase().includes(q) ||
         order.buyGroup?.name.toLowerCase().includes(q) ||
         order.warehouse?.name.toLowerCase().includes(q) ||
-        order.submittedBy?.email.toLowerCase().includes(q) ||
-        memberName(order).toLowerCase().includes(q);
+        (viewMode === "admin" && (order.submittedBy?.email.toLowerCase().includes(q) || memberName(order).toLowerCase().includes(q)));
       return inStage && inAccount && inBuyGroup && inWarehouse && inMember && (!q || matches);
     });
-  }, [accountFilter, buyGroupFilter, memberFilter, orders, query, stage, warehouseFilter]);
+  }, [accountFilter, buyGroupFilter, memberFilter, orders, query, stage, viewMode, warehouseFilter]);
 
   const counts = useMemo(() => {
     const result = new Map<StageFilter, number>();
     result.set("ALL", orders.length);
-    if (isOperatorAdmin) {
+    if (viewMode === "admin") {
       adminStages.slice(1).forEach((item) => result.set(item.key, orders.filter((order) => matchesAdminStage(order, item.key)).length));
+    } else if (viewMode === "personal") {
+      personalStages.slice(1).forEach((item) => result.set(item.key, orders.filter((order) => matchesPersonalStage(order, item.key)).length));
     } else {
       memberStages.slice(1).forEach((item) => result.set(item.key, orders.filter((order) => matchesMemberStage(order, item.key)).length));
     }
     return result;
-  }, [isOperatorAdmin, orders]);
+  }, [orders, viewMode]);
 
   return (
     <main className="min-h-screen text-slate-100">
@@ -458,7 +502,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
         </header>
 
         <div className="px-4 py-5 md:px-7">
-          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} isAdmin={isOperatorAdmin} />}
+          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} viewMode={viewMode} />}
           {section === "orders" && (
             <OrdersView
               orders={filteredOrders}
@@ -467,7 +511,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
               warehouses={warehouses}
               workspaceMembers={workspaceMembers}
               isAdmin={isOperatorAdmin}
-              viewMode={isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member"}
+              viewMode={viewMode}
               counts={counts}
               stage={stage}
               setStage={setStage}
@@ -520,12 +564,12 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
       </section>
 
       {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} onClose={() => setNewOrderOpen(false)} />}
-      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} memberStatus={workspaceMembers.find((member) => member.profileId === selectedOrder.submittedByProfileId)?.status ?? null} isAdmin={isOperatorAdmin} onClose={() => setSelectedOrder(null)} />}
+      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} memberStatus={workspaceMembers.find((member) => member.profileId === selectedOrder.submittedByProfileId)?.status ?? null} isAdmin={isOperatorAdmin} viewMode={viewMode} onClose={() => setSelectedOrder(null)} />}
     </main>
   );
 }
 
-function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage, setSelectedOrder, activeWorkspace, isAdmin }: {
+function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage, setSelectedOrder, activeWorkspace, viewMode }: {
   orders: OrderWithRelations[];
   buyGroups: BuyGroup[];
   reminders: Reminder[];
@@ -534,8 +578,19 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
   setStage: (value: StageFilter) => void;
   setSelectedOrder: (order: OrderWithRelations) => void;
   activeWorkspace: WorkspaceSwitcherItem;
-  isAdmin: boolean;
+  viewMode: WorkflowViewMode;
 }) {
+  const personalMetrics = [
+    { label: "Open Orders", value: totals.openOrders.toString(), featured: true },
+    { label: "Amount Owed", value: money(totals.amountOwed), featured: true },
+    { label: "Realized Profit", value: money(totals.realizedProfit), featured: true },
+    { label: "Unrealized Profit", value: money(totals.unrealizedProfit), featured: true },
+    { label: "Tracking Submitted", value: orders.filter((order) => order.trackingSubmitted || order.trackingNumber).length.toString(), featured: false },
+    { label: "Delivered", value: orders.filter((order) => order.delivered).length.toString(), featured: false },
+    { label: "Scanned", value: orders.filter((order) => order.scanned).length.toString(), featured: false },
+    { label: "Payout from Warehouse", value: orders.filter((order) => order.paidOut).length.toString(), featured: false },
+    { label: "Credit Paid", value: orders.filter((order) => order.creditCardPaid).length.toString(), featured: false }
+  ];
   const adminMetrics = [
     { label: "Open Orders", value: totals.openOrders.toString(), featured: true },
     { label: "Amount Owed", value: money(totals.amountOwed), featured: true },
@@ -557,8 +612,8 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
     { label: "Delivered", value: orders.filter((order) => order.memberMarkedDelivered || order.delivered).length.toString(), featured: false },
     { label: "Paid", value: orders.filter((order) => order.adminPaidMember || order.memberPaid || order.profitReceived).length.toString(), featured: false }
   ];
-  const metrics = isAdmin ? adminMetrics : memberMetrics;
-  const dashboardQueues = isAdmin ? adminStages.slice(1) : memberStages.slice(1);
+  const metrics = viewMode === "admin" ? adminMetrics : viewMode === "personal" ? personalMetrics : memberMetrics;
+  const dashboardQueues = viewMode === "admin" ? adminStages.slice(1) : viewMode === "personal" ? personalStages.slice(1) : memberStages.slice(1);
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
@@ -581,7 +636,7 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
         </div>
         <div className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">{activeWorkspace.type === "OPERATOR" && isAdmin ? "Operator Workflow Queues" : "Active Workflow Queues"}</h2>
+            <h2 className="font-semibold">{viewMode === "admin" ? "Operator Workflow Queues" : viewMode === "personal" ? "Personal Workflow Queues" : "Active Workflow Queues"}</h2>
             <button onClick={() => setSection("orders")} className="text-sm text-blue-300">Open orders</button>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
@@ -595,7 +650,7 @@ function Dashboard({ orders, buyGroups, reminders, totals, setSection, setStage,
                 className={cls("flex items-center justify-between rounded-lg border px-4 py-3 text-left hover:shadow-neon", stageTone[stageToneKey(item.key)])}
               >
                 <span>{item.label}</span>
-                <span className="rounded-md bg-black/25 px-2 py-1 text-xs text-white">{orders.filter((order) => isAdmin ? matchesAdminStage(order, item.key) : matchesMemberStage(order, item.key)).length}</span>
+                <span className="rounded-md bg-black/25 px-2 py-1 text-xs text-white">{orders.filter((order) => viewMode === "admin" ? matchesAdminStage(order, item.key) : viewMode === "personal" ? matchesPersonalStage(order, item.key) : matchesMemberStage(order, item.key)).length}</span>
               </button>
             ))}
           </div>
@@ -710,7 +765,7 @@ function FilterBar({
     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
       <label className="flex min-w-0 items-center gap-2 rounded-lg border border-cyan/20 bg-panel/80 px-3 py-2 text-muted shadow-glow">
         <Search size={16} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search orders or members" className="w-full min-w-0 border-0 bg-transparent p-0 text-sm focus:shadow-none" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={showMemberFilter ? "Search orders or members" : "Search orders"} className="w-full min-w-0 border-0 bg-transparent p-0 text-sm focus:shadow-none" />
       </label>
       {showMemberFilter && (
         <select value={memberFilter} onChange={(event) => setMemberFilter(event.target.value)} className="min-w-0 px-3 py-2 text-sm">
@@ -757,7 +812,7 @@ function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers,
   setMemberFilter: (value: string) => void;
   setSelectedOrder: (order: OrderWithRelations) => void;
 }) {
-  const workflowTabs = isAdmin ? adminStages : memberStages;
+  const workflowTabs = viewMode === "admin" ? adminStages : viewMode === "personal" ? personalStages : memberStages;
   return (
     <section>
       <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -794,7 +849,15 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, viewMode = "mem
   const financials = calculateFinancials(order);
   const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
   const workflowSteps = buildWorkflowSteps(order, viewMode);
-  const statusFields: Array<[string, string]> = isAdmin ? [
+  const statusFields: Array<[string, string]> = viewMode === "personal" ? [
+    ["Status", personalWorkflowLabel(order)],
+    ["Tracking", order.trackingNumber ?? "Missing"],
+    ["Delivered", order.delivered ? "Yes" : "No"],
+    ["Scanned", order.scanned ? "Yes" : "No"],
+    ["Payout", order.paidOut ? "Received" : "Open"],
+    ["Credit", order.creditCardPaid ? "Paid" : "Open"],
+    ["Done", order.profitReceived ? "Yes" : "No"]
+  ] : isAdmin ? [
     ["Submitted by", memberName(order)],
     ["Member email", order.submittedBy?.email ?? "Unknown"],
     ["Tracking", order.trackingNumber ?? "Missing"],
@@ -880,11 +943,11 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, viewMode = "mem
         <button onClick={onOpen} className="min-w-0 text-left">
           <div className="flex items-center gap-2">
             <h3 className="truncate font-semibold">{order.itemName}</h3>
-            <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{memberSafe ? memberWorkflowLabel(order) : adminWorkflowLabel(order)}</span>
+            <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{viewMode === "personal" ? personalWorkflowLabel(order) : memberSafe ? memberWorkflowLabel(order) : adminWorkflowLabel(order)}</span>
           </div>
-          {!memberSafe && order.submittedBy && <div className="mt-1 text-xs text-muted">Submitted by <span className="text-white">{memberName(order)}</span> · {order.submittedBy.email}</div>}
+          {viewMode === "admin" && order.submittedBy && <div className="mt-1 text-xs text-muted">Submitted by <span className="text-white">{memberName(order)}</span> · {order.submittedBy.email}</div>}
           <div className="mt-3 flex flex-wrap gap-2">
-            {(isAdmin ? statusFields : statusFields.concat(fieldsByStage[displayStage as OrderStage].slice(1, 5))).map(([label, value]) => (
+            {(isAdmin || viewMode === "personal" ? statusFields : statusFields.concat(fieldsByStage[displayStage as OrderStage].slice(1, 5))).map(([label, value]) => (
               <span key={label} className="rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
                 {label}: <span className="text-white">{value}</span>
               </span>
@@ -899,18 +962,26 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, viewMode = "mem
             ))}
           </div>
         </button>
-        <StageActions order={order} onOpen={onOpen} isAdmin={isAdmin} />
+        <StageActions order={order} onOpen={onOpen} isAdmin={isAdmin} viewMode={viewMode} />
       </div>
     </article>
   );
 }
 
-function StageActions({ order, onOpen, isAdmin }: { order: OrderWithRelations; onOpen: () => void; isAdmin: boolean }) {
+function StageActions({ order, onOpen, isAdmin, viewMode }: { order: OrderWithRelations; onOpen: () => void; isAdmin: boolean; viewMode: WorkflowViewMode }) {
   if (!isAdmin && !order.trackingNumber) {
-    return <SubmitTrackingForm order={order} />;
+    return <SubmitTrackingForm order={order} viewMode={viewMode} />;
   }
 
-  const action = isAdmin
+  const action = viewMode === "personal"
+    ? (!order.trackingNumber ? "" :
+      !(order.trackingSubmitted || order.currentStage === "TRACKING_SUBMITTED") ? "submitToWarehouse" :
+      !order.delivered ? "memberDelivered" :
+      !order.scanned ? "warehouseScanned" :
+      !order.paidOut ? "warehousePaid" :
+      !order.creditCardPaid ? "cardPaid" :
+      !order.profitReceived ? "profitReceived" : "")
+    : isAdmin
     ? (!(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) && order.trackingNumber ? "submitToWarehouse" :
       (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) ? "warehouseScanned" :
       (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut) ? "warehousePaid" :
@@ -929,10 +1000,10 @@ function StageActions({ order, onOpen, isAdmin }: { order: OrderWithRelations; o
           <input type="hidden" name="id" value={order.id} />
           <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
           <input type="hidden" name="action" value={action} />
-          <button className="rounded-lg border border-green-400/40 bg-green-500/15 px-3 py-2 text-sm font-medium text-green-100 shadow-neon">{actionLabels[action]}</button>
+          <button className="rounded-lg border border-green-400/40 bg-green-500/15 px-3 py-2 text-sm font-medium text-green-100 shadow-neon">{actionButtonLabel(action, viewMode)}</button>
         </form>
       )}
-      {isAdmin && (order.memberMarkedDelivered || order.delivered) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut) && (
+      {isAdmin && viewMode === "admin" && (order.memberMarkedDelivered || order.delivered) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut) && (
         <form action={quickAction}>
           <input type="hidden" name="id" value={order.id} />
           <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
@@ -946,7 +1017,7 @@ function StageActions({ order, onOpen, isAdmin }: { order: OrderWithRelations; o
   );
 }
 
-function SubmitTrackingForm({ order }: { order: OrderWithRelations }) {
+function SubmitTrackingForm({ order, viewMode }: { order: OrderWithRelations; viewMode: WorkflowViewMode }) {
   const initialState: AddTrackingState = { error: null };
   const [state, formAction] = useActionState(addTracking, initialState);
   const [trackingNumber, setTrackingNumber] = useState("");
@@ -984,7 +1055,7 @@ function SubmitTrackingForm({ order }: { order: OrderWithRelations }) {
           />
           {showError && <div id={`tracking-error-${order.id}`} className="mt-1 text-xs text-red-200">{errorMessage}</div>}
         </div>
-        <button className="rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon">Submit Tracking To Admin</button>
+        <button className="rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon">{viewMode === "personal" ? "Submit Tracking" : "Submit Tracking To Admin"}</button>
       </div>
     </form>
   );
@@ -1005,9 +1076,18 @@ function NewOrderModal({ accounts, buyGroups, workspaceId, onClose }: { accounts
   );
 }
 
-function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, memberStatus, isAdmin, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; workspaceName: string; memberStatus: string | null; isAdmin: boolean; onClose: () => void }) {
+function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, memberStatus, isAdmin, viewMode, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; workspaceName: string; memberStatus: string | null; isAdmin: boolean; viewMode: WorkflowViewMode; onClose: () => void }) {
   const financials = calculateFinancials(order);
-  const timeline = [
+  const timeline = viewMode === "personal" ? [
+    ["Ordered", order.createdAt],
+    ["Tracking submitted", order.trackingSubmittedAt ?? order.trackingAddedAt],
+    ["Delivered", order.deliveredAt],
+    ["Scanned", order.scannedAt],
+    ["Payout from warehouse", order.paidOutAt],
+    ["Credit paid to credit card", order.creditCardPaidAt],
+    ["Done", order.profitReceivedAt],
+    ["Last Updated", order.updatedAt]
+  ] : [
     ["Created", order.createdAt],
     ["Tracking sent to admin", order.memberSubmittedTrackingToAdminAt ?? order.trackingAddedAt],
     ...(isAdmin ? [["Submitted to warehouse", order.adminSubmittedTrackingToWarehouseAt ?? order.trackingSubmittedAt] as [string, Date | string | null | undefined]] : []),
@@ -1025,7 +1105,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
           <input type="hidden" name="id" value={order.id} />
           <input type="hidden" name="workspaceId" value={workspaceId} />
           <OrderFields accounts={accounts} buyGroups={buyGroups} order={order} lockTracking={isAdmin} />
-          {isAdmin && (
+          {viewMode === "admin" && (
             <div className="grid gap-3 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-2">
               <CheckField name="adminSubmittedTrackingToWarehouse" label="Submitted to warehouse" defaultChecked={order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted} />
               <CheckField name="adminMarkedScannedByWarehouse" label="Scanned by warehouse" defaultChecked={order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned} />
@@ -1035,12 +1115,22 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               <Field label="Admin-only notes" wide><textarea name="internalAdminNotes" defaultValue={order.internalAdminNotes ?? ""} rows={3} className="w-full resize-none px-3 py-2 text-sm" /></Field>
             </div>
           )}
-          {!isAdmin && (
+          {viewMode === "personal" && (
+            <div className="grid gap-3 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-2">
+              <CheckField name="trackingSubmitted" label="Tracking submitted" defaultChecked={order.trackingSubmitted || !!order.trackingNumber} />
+              <CheckField name="delivered" label="Delivered to warehouse" defaultChecked={order.delivered} />
+              <CheckField name="scanned" label="Scanned / confirmed by warehouse" defaultChecked={order.scanned} />
+              <CheckField name="paidOut" label="Payout from warehouse received" defaultChecked={order.paidOut} />
+              <CheckField name="creditCardPaid" label="Credit paid to credit card" defaultChecked={order.creditCardPaid} />
+              <CheckField name="profitReceived" label="Done" defaultChecked={order.profitReceived} />
+            </div>
+          )}
+          {viewMode === "member" && (
             <div className="grid gap-3 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-2">
               <CheckField name="memberMarkedDelivered" label="Delivered from Amazon" defaultChecked={order.memberMarkedDelivered || order.delivered} />
             </div>
           )}
-          <Field label="Member-visible notes" wide><textarea name="memberVisibleNotes" defaultValue={order.memberVisibleNotes ?? ""} rows={3} className="w-full resize-none px-3 py-2 text-sm" /></Field>
+          <Field label={viewMode === "personal" ? "Notes" : "Member-visible notes"} wide><textarea name="memberVisibleNotes" defaultValue={order.memberVisibleNotes ?? ""} rows={3} className="w-full resize-none px-3 py-2 text-sm" /></Field>
           {isAdmin && (
             <div>
               <label className="mb-1 block text-xs text-muted">Manual credit card due date</label>
@@ -1054,22 +1144,43 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
         </form>
         <aside className="space-y-4">
           <div className="rounded-lg border border-line bg-surface/60 p-4">
-            <div className="mb-3 text-sm font-semibold">Submission</div>
-            <Fact label="Submitted by" value={memberName(order)} />
-            <Fact label="Member email" value={order.submittedBy?.email ?? "Unknown"} />
+            <div className="mb-3 text-sm font-semibold">{viewMode === "personal" ? "Workflow" : "Submission"}</div>
+            {viewMode !== "personal" && <Fact label="Submitted by" value={memberName(order)} />}
+            {viewMode !== "personal" && <Fact label="Member email" value={order.submittedBy?.email ?? "Unknown"} />}
             <Fact label="Workspace" value={workspaceName} />
-            <Fact label="Member status" value={memberStatus ?? "Unknown"} />
-            <Fact label="Member tracking" value={order.memberSubmittedTrackingToAdmin || order.trackingNumber ? "Sent to admin" : "Ordered / tracking needed"} />
-            {isAdmin && <Fact label="Warehouse submission" value={order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted to warehouse" : "Not submitted to warehouse"} />}
-            <Fact label="Member delivered" value={yesNo(order.memberMarkedDelivered || order.delivered)} />
-            <Fact label="Warehouse scanned" value={yesNo(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned)} />
-            {isAdmin && <Fact label="Warehouse paid admin" value={yesNo(order.adminReceivedPayoutFromWarehouse || order.buyGroupPaidAdmin || order.paidOut)} />}
-            <Fact label="Paid to member" value={order.adminPaidMember || order.memberPaid ? "Yes" : "No"} />
-            <Fact label="Member payout" value={money(order.memberPayoutAmount ?? financials.amountOwed)} />
+            {viewMode !== "personal" && <Fact label="Member status" value={memberStatus ?? "Unknown"} />}
+            {viewMode === "personal" ? (
+              <>
+                <Fact label="Tracking submitted" value={yesNo(order.trackingSubmitted || !!order.trackingNumber)} />
+                <Fact label="Delivered" value={yesNo(order.delivered)} />
+                <Fact label="Scanned" value={yesNo(order.scanned)} />
+                <Fact label="Payout from warehouse" value={yesNo(order.paidOut)} />
+                <Fact label="Credit paid to credit card" value={yesNo(order.creditCardPaid)} />
+                <Fact label="Done" value={yesNo(order.profitReceived)} />
+              </>
+            ) : (
+              <>
+                <Fact label="Member tracking" value={order.memberSubmittedTrackingToAdmin || order.trackingNumber ? "Sent to admin" : "Ordered / tracking needed"} />
+                {isAdmin && <Fact label="Warehouse submission" value={order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted to warehouse" : "Not submitted to warehouse"} />}
+                <Fact label="Member delivered" value={yesNo(order.memberMarkedDelivered || order.delivered)} />
+                <Fact label="Warehouse scanned" value={yesNo(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned)} />
+                {isAdmin && <Fact label="Warehouse paid admin" value={yesNo(order.adminReceivedPayoutFromWarehouse || order.buyGroupPaidAdmin || order.paidOut)} />}
+                <Fact label="Paid to member" value={order.adminPaidMember || order.memberPaid ? "Yes" : "No"} />
+                <Fact label="Member payout" value={money(order.memberPayoutAmount ?? financials.amountOwed)} />
+              </>
+            )}
           </div>
           <div className="rounded-lg border border-line bg-surface/60 p-4">
             <div className="mb-3 text-sm font-semibold">Financials</div>
-            {(isAdmin ? [
+            {(viewMode === "personal" ? [
+              ["Total Paid", money(financials.totalPaid)],
+              ["Total Payout", money(financials.totalPayout)],
+              ["Chase Cashback", money(financials.chaseCashback)],
+              ["Young Adult Cashback", money(financials.youngAdultCashback)],
+              ["Amount Owed", money(financials.amountOwed)],
+              ["Estimated Profit", money(financials.profit)],
+              ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
+            ] : isAdmin ? [
               ["Total Paid", money(financials.totalPaid)],
               ["Total Payout", money(financials.totalPayout)],
               ["Chase Cashback", money(financials.chaseCashback)],
