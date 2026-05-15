@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import type { OrderStage } from "@prisma/client";
 import { buildReminders, calculateFinancials } from "@/lib/domain";
 import { displayProfileName, getWorkspaceContext, orderVisibilityWhere } from "@/lib/workspace";
 import CommandCenter from "@/components/CommandCenter";
@@ -33,8 +34,38 @@ export default async function Home({ searchParams }: Props) {
   ]);
 
   const reminders = buildReminders(orders);
-  const openOrders = orders.filter((order) => !order.profitReceived);
-  const totals = orders.reduce(
+  const visibleOrders = context.isAdmin ? orders : orders.map((order) => ({
+    ...order,
+    trackingSubmitted: false,
+    trackingSubmittedAt: null,
+    scanned: false,
+    scannedAt: null,
+    paidOut: false,
+    paidOutAt: null,
+    creditCardPaid: false,
+    creditCardPaidAt: null,
+    profitReceived: order.memberPaid,
+    profitReceivedAt: order.memberPaidAt,
+    payoutReminderSnoozedAt: null,
+    internalAdminNotes: null,
+    adminSubmittedTrackingToBuyGroup: false,
+    adminSubmittedTrackingToBuyGroupAt: null,
+    warehouseScanned: false,
+    warehouseScannedAt: null,
+    buyGroupPaidAdmin: false,
+    buyGroupPaidAdminAt: null,
+    adminProfit: null,
+    adminMargin: null,
+    currentStage: (order.memberPaid
+      ? "PROFIT_RECEIVED"
+      : order.delivered
+        ? "DELIVERED"
+        : order.trackingNumber
+          ? "TRACKING_READY"
+          : "ORDERED") as OrderStage
+  }));
+  const openOrders = visibleOrders.filter((order) => !order.profitReceived);
+  const totals = visibleOrders.reduce(
     (acc, order) => {
       const financials = calculateFinancials(order);
       if (!order.profitReceived) {
@@ -57,7 +88,7 @@ export default async function Home({ searchParams }: Props) {
 
   return (
     <CommandCenter
-      orders={orders}
+      orders={visibleOrders}
       accounts={accounts}
       buyGroups={buyGroups}
       warehouses={warehouses}

@@ -27,6 +27,10 @@ export async function createPersonalWorkspace() {
 export async function createOperatorWorkspace(formData: FormData) {
   const profile = await ensureProfile();
   const name = value(formData, "workspaceName") || `${profile.name ?? "My"} Buy Group Ops`;
+  const operatorCode = value(formData, "operatorCreationCode");
+  if (!process.env.OPERATOR_CREATION_CODE || operatorCode !== process.env.OPERATOR_CREATION_CODE) {
+    redirect("/onboarding?error=Invalid operator access code.");
+  }
   const workspace = await createWorkspaceForProfile(profile, "OPERATOR", name);
   redirect(`/?workspace=${workspace.id}`);
 }

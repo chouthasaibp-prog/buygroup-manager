@@ -154,6 +154,9 @@ export async function updateOrder(formData: FormData) {
         paidOut,
         creditCardPaid,
         profitReceived,
+        adminSubmittedTrackingToBuyGroup: trackingSubmitted,
+        warehouseScanned: scanned,
+        buyGroupPaidAdmin: paidOut,
         memberPaid: boolFromForm(formData, "memberPaid"),
         memberPaidAt: boolFromForm(formData, "memberPaid") && !existing.memberPaid ? new Date() : existing.memberPaidAt,
         memberPayoutAmount,
@@ -173,6 +176,9 @@ export async function updateOrder(formData: FormData) {
         deliveredAt: delivered && !existing.delivered ? new Date() : existing.deliveredAt,
         scannedAt: scanned && !existing.scanned ? new Date() : existing.scannedAt,
         paidOutAt: paidOut && !existing.paidOut ? new Date() : existing.paidOutAt,
+        adminSubmittedTrackingToBuyGroupAt: trackingSubmitted && !existing.adminSubmittedTrackingToBuyGroup ? new Date() : existing.adminSubmittedTrackingToBuyGroupAt,
+        warehouseScannedAt: scanned && !existing.warehouseScanned ? new Date() : existing.warehouseScannedAt,
+        buyGroupPaidAdminAt: paidOut && !existing.buyGroupPaidAdmin ? new Date() : existing.buyGroupPaidAdminAt,
         creditCardPaidAt: creditCardPaid && !existing.creditCardPaid ? new Date() : existing.creditCardPaidAt,
         profitReceivedAt: profitReceived && !existing.profitReceived ? new Date() : existing.profitReceivedAt
       } : {})
@@ -231,6 +237,8 @@ export async function quickAction(formData: FormData) {
   if (action === "submitTracking" && order.trackingNumber) {
     data.trackingSubmitted = true;
     data.trackingSubmittedAt = now;
+    data.adminSubmittedTrackingToBuyGroup = true;
+    data.adminSubmittedTrackingToBuyGroupAt = now;
   }
 
   if (action === "delivered") {
@@ -241,11 +249,15 @@ export async function quickAction(formData: FormData) {
   if (action === "scanned" && order.delivered) {
     data.scanned = true;
     data.scannedAt = now;
+    data.warehouseScanned = true;
+    data.warehouseScannedAt = now;
   }
 
   if (action === "paidOut" && order.delivered && order.scanned) {
     data.paidOut = true;
     data.paidOutAt = now;
+    data.buyGroupPaidAdmin = true;
+    data.buyGroupPaidAdminAt = now;
   }
 
   if (action === "cardPaid" && order.paidOut) {
@@ -439,6 +451,10 @@ export async function createPersonalWorkspaceFromApp() {
 export async function createOperatorWorkspaceFromApp(formData: FormData) {
   const profile = await ensureProfile();
   const name = optionalString(formData, "workspaceName") || `${profile.firstName || profile.name || "My"} Buy Group Ops`;
+  const operatorCode = optionalString(formData, "operatorCreationCode");
+  if (!process.env.OPERATOR_CREATION_CODE || operatorCode !== process.env.OPERATOR_CREATION_CODE) {
+    throw new Error("Invalid operator access code.");
+  }
   await createWorkspaceForProfile(profile, "OPERATOR", name);
   revalidatePath("/");
 }

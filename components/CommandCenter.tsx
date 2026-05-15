@@ -87,6 +87,17 @@ const operatorMemberNav = [
   { key: "settings", label: "Settings", icon: Settings }
 ] as const;
 
+const memberStageLabels: Partial<Record<OrderStage, string>> = {
+  ORDERED: "Submitted",
+  TRACKING_READY: "Tracking sent",
+  TRACKING_SUBMITTED: "Processing",
+  DELIVERED: "Delivered",
+  SCANNED: "Processing",
+  PAID_OUT: "Processing",
+  CREDIT_PAID: "Processing",
+  PROFIT_RECEIVED: "Paid"
+};
+
 const actionLabels: Record<string, string> = {
   submitTracking: "Mark Submitted",
   delivered: "Mark Delivered",
@@ -557,20 +568,19 @@ function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers,
         </div>
       </div>
       <div className="space-y-3">
-        {orders.map((order) => <OrderQueueCard key={order.id} order={order} stage={stage} onOpen={() => setSelectedOrder(order)} />)}
+        {orders.map((order) => <OrderQueueCard key={order.id} order={order} stage={stage} memberSafe={!isAdmin} onOpen={() => setSelectedOrder(order)} />)}
         {orders.length === 0 && <div className="rounded-lg border border-dashed border-line bg-panel/60 p-8 text-center text-muted">No orders in this queue.</div>}
       </div>
     </section>
   );
 }
 
-function OrderQueueCard({ order, stage, onOpen }: { order: OrderWithRelations; stage: OrderStage | "ALL"; onOpen: () => void }) {
+function OrderQueueCard({ order, stage, onOpen, memberSafe = false }: { order: OrderWithRelations; stage: OrderStage | "ALL"; onOpen: () => void; memberSafe?: boolean }) {
   const financials = calculateFinancials(order);
   const displayStage = stage === "ALL" ? order.currentStage : stage;
   const fieldsByStage: Record<OrderStage, Array<[string, string]>> = {
     ORDERED: [
-      ["Submitted by", memberName(order)],
-      ["Member email", order.submittedBy?.email ?? "Unknown"],
+      ...(memberSafe ? [] : [["Submitted by", memberName(order)], ["Member email", order.submittedBy?.email ?? "Unknown"]] as Array<[string, string]>),
       ["Qty", String(order.quantity)],
       ["Account", order.amazonAccount?.name ?? "Missing"],
       ["Group", order.buyGroup?.name ?? "Missing"],
@@ -637,9 +647,9 @@ function OrderQueueCard({ order, stage, onOpen }: { order: OrderWithRelations; s
         <button onClick={onOpen} className="min-w-0 text-left">
           <div className="flex items-center gap-2">
             <h3 className="truncate font-semibold">{order.itemName}</h3>
-            <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{stageLabels[order.currentStage]}</span>
+            <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{memberSafe ? memberStageLabels[order.currentStage] ?? "Processing" : stageLabels[order.currentStage]}</span>
           </div>
-          {order.submittedBy && <div className="mt-1 text-xs text-muted">Submitted by <span className="text-white">{memberName(order)}</span> · {order.submittedBy.email}</div>}
+          {!memberSafe && order.submittedBy && <div className="mt-1 text-xs text-muted">Submitted by <span className="text-white">{memberName(order)}</span> · {order.submittedBy.email}</div>}
           <div className="mt-3 flex flex-wrap gap-2">
             {fieldsByStage[displayStage as OrderStage].map(([label, value]) => (
               <span key={label} className="rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
@@ -1055,7 +1065,7 @@ function TrackingNeededView({ orders }: { orders: OrderWithRelations[] }) {
   const trackingNeeded = orders.filter((order) => !order.trackingNumber);
   return (
     <div className="space-y-3">
-      {trackingNeeded.map((order) => <OrderQueueCard key={order.id} order={order} stage="ALL" onOpen={() => undefined} />)}
+      {trackingNeeded.map((order) => <OrderQueueCard key={order.id} order={order} stage="ALL" memberSafe onOpen={() => undefined} />)}
       {trackingNeeded.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">No orders need tracking.</div>}
     </div>
   );
@@ -1362,6 +1372,7 @@ function SettingsView({ profile, activeWorkspace, workspaces }: { profile: Props
             <h3 className="font-semibold">Create Operator Workspace</h3>
             <p className="mt-2 text-sm text-muted">Manage orders from friends or sub-sellers.</p>
             <input name="workspaceName" required placeholder="Sai Buy Group Ops" className="mt-3 w-full px-3 py-2 text-sm" />
+            <input name="operatorCreationCode" required type="password" placeholder="Operator access code" className="mt-3 w-full px-3 py-2 text-sm" />
             <button className="mt-4 rounded-lg bg-green-500 px-3 py-2 text-sm font-medium text-white">Create Operator</button>
           </form>
           <form action={joinOperatorWorkspaceFromApp} className="rounded-lg border border-line bg-surface/60 p-4">

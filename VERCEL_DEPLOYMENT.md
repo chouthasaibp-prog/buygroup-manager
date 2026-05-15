@@ -15,6 +15,7 @@ DATABASE_URL
 DIRECT_URL
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
+OPERATOR_CREATION_CODE
 ```
 
 `DATABASE_URL` is the pooled Supabase connection used by the running app.
@@ -43,6 +44,14 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<your anon public key>
 ```
 
 Add all four variables to every Vercel environment you plan to use:
+
+Add the server-only operator workspace creation gate:
+
+```text
+OPERATOR_CREATION_CODE=<choose-a-secret-code>
+```
+
+Do not prefix it with `NEXT_PUBLIC_`.
 
 - Production
 - Preview

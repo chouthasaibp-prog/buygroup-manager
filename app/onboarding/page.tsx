@@ -49,6 +49,10 @@ export default async function OnboardingPage({ searchParams }: Props) {
               <span className="mb-1 block text-xs text-muted">Workspace name</span>
               <input name="workspaceName" required placeholder="Sai Buy Group Ops" className="w-full px-3 py-2 text-sm" />
             </label>
+            <label className="mt-3 block">
+              <span className="mb-1 block text-xs text-muted">Operator access code</span>
+              <input name="operatorCreationCode" required type="password" className="w-full px-3 py-2 text-sm" />
+            </label>
             <button className="mt-5 w-full rounded-lg bg-green-500 px-3 py-2 text-sm font-medium text-white">Create Workspace</button>
           </form>
         </div>

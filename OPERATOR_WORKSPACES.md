@@ -27,6 +27,8 @@ They can choose:
 
 Users can also create a personal workspace, create an operator workspace, or join an operator workspace later from **Settings > Workspaces**. A user can belong to multiple workspaces and switch between them from the workspace selector in the sidebar.
 
+Creating an operator workspace requires the server-only `OPERATOR_CREATION_CODE`. Personal workspace creation and joining an operator by invite code stay open.
+
 ## Existing Data
 
 Existing rows were preserved. To assign old imported rows to a workspace, use:
@@ -53,6 +55,7 @@ Server-side checks enforce:
 - Members can create orders and add tracking to their own orders.
 - Admin-only actions, such as marking tracking submitted, paid out, profit received, or member paid, are blocked server-side for members.
 - Operator/admin order views show the submitting member's name/email and support filtering by member, stage, Amazon account, buy group, warehouse, and search text.
+- Member responses are sanitized server-side. Members do not receive admin-only fields such as buy group payout, warehouse scan, admin submission timestamps, internal notes, admin profit, or admin margin.
 
 Supabase RLS policies are also installed as a database backstop for direct Supabase access.
 
