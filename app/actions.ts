@@ -554,6 +554,16 @@ export async function quickAction(formData: FormData) {
 
   if (Object.keys(data).length > 0) {
     await prisma.order.update({ where: { id }, data });
+    if (!isPersonal && isOperatorAdmin && (action === "submitTracking" || action === "submitToWarehouse")) {
+      await prisma.deliveryBeforeTrackingAlert.updateMany({
+        where: {
+          workspaceId,
+          orderId: id,
+          reviewedAt: null
+        },
+        data: { reviewedAt: now }
+      });
+    }
     if (!isPersonal && action === "memberDelivered" && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)) {
       await createDeliveryBeforeTrackingAlert({
         workspaceId,

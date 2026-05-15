@@ -49,6 +49,15 @@ type DeliveryBeforeTrackingAlertItem = DeliveryBeforeTrackingAlert & {
   member: Profile | null;
 };
 
+type OrderCardAlert = {
+  id: string;
+  kind: "urgent_delivery" | "tracking_change" | "reminder";
+  priority: "high" | "normal";
+  label: string;
+  detail?: string;
+  action?: "submitToWarehouse" | "open";
+};
+
 type WorkspaceSwitcherItem = {
   id: string;
   name: string;
@@ -368,6 +377,57 @@ function actionButtonLabel(action: string, viewMode: WorkflowViewMode) {
   return actionLabels[action];
 }
 
+function reminderLabel(reminder: Reminder) {
+  if (reminder.type === "missing_info") return reminder.notes ?? "Missing order info";
+  if (reminder.type === "submit_tracking") return reminder.order.trackingNumber ? "Tracking needs warehouse submission" : "Tracking missing";
+  if (reminder.type === "check_payout") return "Payout reminder";
+  if (reminder.type === "pay_credit_card") return "Payment reminder";
+  if (reminder.type === "confirm_profit") return "Done reminder";
+  return reminder.label;
+}
+
+function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewMode, reminders: Reminder[], trackingChangeAlerts: TrackingChangeAlertItem[], deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]) {
+  if (viewMode !== "admin") return [];
+
+  const alerts: OrderCardAlert[] = [];
+  const urgentAlert = deliveryBeforeTrackingAlerts.find((alert) => alert.orderId === order.id);
+  const hasUrgentDeliveryState = (order.memberMarkedDelivered || order.delivered) && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted);
+  if (urgentAlert || hasUrgentDeliveryState) {
+    alerts.push({
+      id: urgentAlert?.id ?? `${order.id}:urgent-delivery`,
+      kind: "urgent_delivery",
+      priority: "high",
+      label: "Urgent: delivered before warehouse tracking submission.",
+      detail: order.trackingNumber ? `Tracking ${order.trackingNumber}` : "Tracking missing",
+      action: order.trackingNumber ? "submitToWarehouse" : "open"
+    });
+  }
+
+  for (const alert of trackingChangeAlerts.filter((item) => item.orderId === order.id)) {
+    alerts.push({
+      id: alert.id,
+      kind: "tracking_change",
+      priority: "normal",
+      label: "Tracking number changed by member.",
+      detail: `${alert.oldTrackingNumber || "Empty"} -> ${alert.newTrackingNumber || "Empty"}`,
+      action: "open"
+    });
+  }
+
+  for (const reminder of reminders.filter((item) => item.order.id === order.id)) {
+    alerts.push({
+      id: reminder.id,
+      kind: "reminder",
+      priority: reminder.severity === "overdue" ? "high" : "normal",
+      label: reminderLabel(reminder),
+      detail: `Due ${shortDate(reminder.dueDate)}`,
+      action: reminder.type === "submit_tracking" && order.trackingNumber ? "submitToWarehouse" : "open"
+    });
+  }
+
+  return alerts.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "high" ? -1 : 1)).slice(0, 3);
+}
+
 function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilter) {
   if (selectedStage === "ALL") return true;
   if (selectedStage === "ORDERED") return !(order.memberSubmittedTrackingToAdmin || order.trackingNumber);
@@ -529,6 +589,9 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
           {section === "orders" && (
             <OrdersView
               orders={filteredOrders}
+              reminders={reminders}
+              trackingChangeAlerts={trackingChangeAlerts}
+              deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts}
               accounts={accounts}
               buyGroups={buyGroups}
               warehouses={warehouses}
@@ -919,8 +982,11 @@ function FilterBar({
   );
 }
 
-function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers, isAdmin, viewMode, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, warehouseFilter, setWarehouseFilter, memberFilter, setMemberFilter, setSelectedOrder }: {
+function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, accounts, buyGroups, warehouses, workspaceMembers, isAdmin, viewMode, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, warehouseFilter, setWarehouseFilter, memberFilter, setMemberFilter, setSelectedOrder }: {
   orders: OrderWithRelations[];
+  reminders: Reminder[];
+  trackingChangeAlerts: TrackingChangeAlertItem[];
+  deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[];
   accounts: AmazonAccount[];
   buyGroups: BuyGroup[];
   warehouses: Warehouse[];
@@ -968,14 +1034,25 @@ function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers,
         </div>
       </div>
       <div className="space-y-3">
-        {orders.map((order) => <OrderQueueCard key={order.id} order={order} stage={stage} isAdmin={isAdmin} viewMode={viewMode} memberSafe={!isAdmin} onOpen={() => setSelectedOrder(order)} />)}
+        {orders.map((order) => (
+          <OrderQueueCard
+            key={order.id}
+            order={order}
+            alerts={buildOrderCardAlerts(order, viewMode, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts)}
+            stage={stage}
+            isAdmin={isAdmin}
+            viewMode={viewMode}
+            memberSafe={!isAdmin}
+            onOpen={() => setSelectedOrder(order)}
+          />
+        ))}
         {orders.length === 0 && <div className="rounded-lg border border-dashed border-line bg-panel/60 p-8 text-center text-muted">No orders in this queue.</div>}
       </div>
     </section>
   );
 }
 
-function OrderQueueCard({ order, stage, onOpen, isAdmin = false, viewMode = "member", memberSafe = false }: { order: OrderWithRelations; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; viewMode?: WorkflowViewMode; memberSafe?: boolean }) {
+function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, viewMode = "member", memberSafe = false }: { order: OrderWithRelations; alerts?: OrderCardAlert[]; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; viewMode?: WorkflowViewMode; memberSafe?: boolean }) {
   const financials = calculateFinancials(order);
   const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
   const workflowSteps = buildWorkflowSteps(order, viewMode);
@@ -1069,8 +1146,8 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, viewMode = "mem
 
   return (
     <article className={cls("rounded-lg border bg-panel/80 p-4 shadow-glow transition hover:-translate-y-0.5 hover:shadow-neon", stageTone[order.currentStage])}>
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <button onClick={onOpen} className="min-w-0 text-left">
+      <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between">
+        <button onClick={onOpen} className="min-w-0 text-left xl:flex-1">
           <div className="flex items-center gap-2">
             <h3 className="truncate font-semibold">{order.itemName}</h3>
             <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{viewMode === "personal" ? personalWorkflowLabel(order) : memberSafe ? memberWorkflowLabel(order) : adminWorkflowLabel(order)}</span>
@@ -1092,9 +1169,47 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, viewMode = "mem
             ))}
           </div>
         </button>
+        {alerts.length > 0 && <OrderCardAlerts order={order} alerts={alerts} onOpen={onOpen} />}
         <StageActions order={order} onOpen={onOpen} isAdmin={isAdmin} viewMode={viewMode} />
       </div>
     </article>
+  );
+}
+
+function OrderCardAlerts({ order, alerts, onOpen }: { order: OrderWithRelations; alerts: OrderCardAlert[]; onOpen: () => void }) {
+  return (
+    <div className="w-full xl:order-3">
+      <div className="mt-1 grid gap-1.5 lg:grid-cols-2 2xl:grid-cols-3">
+        {alerts.map((alert) => (
+          <div
+            key={alert.id}
+            className={cls(
+              "flex min-w-0 flex-wrap items-center gap-2 rounded-md border px-2.5 py-2 text-xs",
+              alert.priority === "high"
+                ? "border-red-400/60 bg-red-500/15 text-red-50"
+                : "border-blue-300/35 bg-blue-500/10 text-blue-100"
+            )}
+          >
+            <span className={cls("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[.12em]", alert.priority === "high" ? "bg-red-500/25 text-red-100" : "bg-blue-500/20 text-blue-100")}>
+              <AlertTriangle size={12} />
+              {alert.priority === "high" ? "Urgent" : "Alert"}
+            </span>
+            <span className="min-w-0 flex-1 truncate font-medium">{alert.label}</span>
+            {alert.detail && <span className="truncate text-muted">{alert.detail}</span>}
+            {alert.action === "submitToWarehouse" ? (
+              <form action={quickAction}>
+                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                <input type="hidden" name="id" value={order.id} />
+                <input type="hidden" name="action" value="submitToWarehouse" />
+                <button className="rounded-md border border-red-200/40 px-2 py-1 text-[11px] font-medium text-red-50 hover:bg-red-500/20">Submit to Warehouse</button>
+              </form>
+            ) : (
+              <button type="button" onClick={onOpen} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white hover:bg-white/10">Open</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
