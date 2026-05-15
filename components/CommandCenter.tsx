@@ -88,7 +88,7 @@ type WorkflowDateStep = {
 };
 
 const adminStages: Array<{ key: StageFilter; label: string; short: string }> = [
-  { key: "ALL", label: "All", short: "All" },
+  { key: "ALL", label: "Active Orders", short: "Active Orders" },
   { key: "ORDERED", label: "Waiting for Member Tracking", short: "Waiting for Member Tracking" },
   { key: "TRACKING_READY", label: "Tracking Received from Member", short: "Tracking Received from Member" },
   { key: "TRACKING_SUBMITTED", label: "Submitted to Warehouse", short: "Submitted to Warehouse" },
@@ -100,7 +100,7 @@ const adminStages: Array<{ key: StageFilter; label: string; short: string }> = [
 ];
 
 const personalStages: Array<{ key: StageFilter; label: string; short: string }> = [
-  { key: "ALL", label: "All", short: "All" },
+  { key: "ALL", label: "Active Orders", short: "Active Orders" },
   { key: "ORDERED", label: "Ordered", short: "Ordered" },
   { key: "TRACKING_SUBMITTED", label: "Tracking Submitted", short: "Tracking Submitted" },
   { key: "DELIVERED", label: "Delivered", short: "Delivered" },
@@ -111,7 +111,7 @@ const personalStages: Array<{ key: StageFilter; label: string; short: string }> 
 ];
 
 const memberStages: Array<{ key: StageFilter; label: string; short: string }> = [
-  { key: "ALL", label: "All", short: "All" },
+  { key: "ALL", label: "Active Orders", short: "Active Orders" },
   { key: "ORDERED", label: "Ordered / Tracking Needed", short: "Ordered / Tracking Needed" },
   { key: "MEMBER_TRACKING_SENT", label: "Tracking Sent to Admin", short: "Tracking Sent to Admin" },
   { key: "DELIVERED", label: "Delivered", short: "Delivered" },
@@ -448,8 +448,20 @@ function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewM
   return alerts.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "high" ? -1 : 1)).slice(0, 3);
 }
 
+function isMemberDone(order: OrderWithRelations) {
+  return order.memberMarkedDone || order.profitReceived;
+}
+
+function isPersonalDone(order: OrderWithRelations) {
+  return order.profitReceived;
+}
+
+function isAdminDone(order: OrderWithRelations) {
+  return order.adminPaidMember || order.memberPaid || order.profitReceived;
+}
+
 function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilter) {
-  if (selectedStage === "ALL") return true;
+  if (selectedStage === "ALL") return !isMemberDone(order);
   if (selectedStage === "ORDERED") return !(order.memberSubmittedTrackingToAdmin || order.trackingNumber);
   if (selectedStage === "MEMBER_TRACKING_SENT") return !!order.trackingNumber && !(order.memberMarkedDelivered || order.delivered) && !(order.memberMarkedDone || order.profitReceived);
   if (selectedStage === "DELIVERED") return (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.memberMarkedDone || order.profitReceived);
@@ -457,24 +469,24 @@ function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilte
   if (selectedStage === "MEMBER_AWAITING_PAYMENT") return (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminPaidMember || order.memberPaid);
   if (selectedStage === "MEMBER_PAYMENT_SENT" || selectedStage === "MEMBER_PAID") return (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment;
   if (selectedStage === "MEMBER_PAYMENT_CONFIRMED") return order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived);
-  if (selectedStage === "MEMBER_DONE") return order.memberMarkedDone || order.profitReceived;
+  if (selectedStage === "MEMBER_DONE") return isMemberDone(order);
   return order.currentStage === selectedStage;
 }
 
 function matchesPersonalStage(order: OrderWithRelations, selectedStage: StageFilter) {
-  if (selectedStage === "ALL") return true;
+  if (selectedStage === "ALL") return !isPersonalDone(order);
   if (selectedStage === "ORDERED") return !(order.trackingSubmitted || order.trackingNumber);
   if (selectedStage === "TRACKING_SUBMITTED") return (order.trackingSubmitted || !!order.trackingNumber) && !order.delivered;
   if (selectedStage === "DELIVERED") return order.delivered && !order.scanned;
   if (selectedStage === "SCANNED") return order.scanned && !order.paidOut;
   if (selectedStage === "PAID_OUT") return order.paidOut && !order.creditCardPaid;
   if (selectedStage === "CREDIT_PAID") return order.creditCardPaid && !order.profitReceived;
-  if (selectedStage === "PROFIT_RECEIVED") return order.profitReceived;
+  if (selectedStage === "PROFIT_RECEIVED") return isPersonalDone(order);
   return order.currentStage === selectedStage;
 }
 
 function matchesAdminStage(order: OrderWithRelations, selectedStage: StageFilter) {
-  if (selectedStage === "ALL") return true;
+  if (selectedStage === "ALL") return !isAdminDone(order);
   if (selectedStage === "ORDERED") return !order.trackingNumber;
   if (selectedStage === "TRACKING_READY") return !!order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted);
   if (selectedStage === "TRACKING_SUBMITTED") return (order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) && !(order.memberMarkedDelivered || order.delivered);
@@ -482,7 +494,7 @@ function matchesAdminStage(order: OrderWithRelations, selectedStage: StageFilter
   if (selectedStage === "SCANNED") return (order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut);
   if (selectedStage === "PAID_OUT") return (order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid);
   if (selectedStage === "ADMIN_PAID_TO_MEMBER") return order.adminPaidMember || order.memberPaid;
-  if (selectedStage === "ADMIN_DONE") return order.adminPaidMember || order.memberPaid || order.profitReceived;
+  if (selectedStage === "ADMIN_DONE") return isAdminDone(order);
   return order.currentStage === selectedStage;
 }
 
@@ -499,7 +511,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
   const [section, setSection] = useState<string>("dashboard");
-  const [stage, setStage] = useState<StageFilter>("ORDERED");
+  const [stage, setStage] = useState<StageFilter>("ALL");
   const [query, setQuery] = useState("");
   const [accountFilter, setAccountFilter] = useState("ALL");
   const [buyGroupFilter, setBuyGroupFilter] = useState("ALL");
@@ -532,12 +544,14 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
 
   const counts = useMemo(() => {
     const result = new Map<StageFilter, number>();
-    result.set("ALL", orders.length);
     if (viewMode === "admin") {
+      result.set("ALL", orders.filter((order) => matchesAdminStage(order, "ALL")).length);
       adminStages.slice(1).forEach((item) => result.set(item.key, orders.filter((order) => matchesAdminStage(order, item.key)).length));
     } else if (viewMode === "personal") {
+      result.set("ALL", orders.filter((order) => matchesPersonalStage(order, "ALL")).length);
       personalStages.slice(1).forEach((item) => result.set(item.key, orders.filter((order) => matchesPersonalStage(order, item.key)).length));
     } else {
+      result.set("ALL", orders.filter((order) => matchesMemberStage(order, "ALL")).length);
       memberStages.slice(1).forEach((item) => result.set(item.key, orders.filter((order) => matchesMemberStage(order, item.key)).length));
     }
     return result;
@@ -777,7 +791,10 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
         <div className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-semibold">{viewMode === "admin" ? "Operator Workflow Queues" : viewMode === "personal" ? "Personal Workflow Queues" : "Active Workflow Queues"}</h2>
-            <button onClick={() => setSection("orders")} className="text-sm text-blue-300">Open orders</button>
+            <button onClick={() => {
+              setStage("ALL");
+              setSection("orders");
+            }} className="text-sm text-blue-300">Open active orders</button>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
             {dashboardQueues.map((item) => (
