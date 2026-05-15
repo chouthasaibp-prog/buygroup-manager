@@ -58,6 +58,12 @@ type WorkspaceMemberItem = {
 };
 
 type StageFilter = OrderStage | "ALL" | "ADMIN_PAID_TO_MEMBER" | "ADMIN_DONE" | "MEMBER_TRACKING_SENT" | "MEMBER_PAID" | "MEMBER_DONE";
+type WorkflowViewMode = "personal" | "member" | "admin";
+type WorkflowDateStep = {
+  label: string;
+  completed: boolean;
+  date: Date | string | null | undefined;
+};
 
 const adminStages: Array<{ key: StageFilter; label: string; short: string }> = [
   { key: "ALL", label: "All", short: "All" },
@@ -188,6 +194,125 @@ function adminWorkflowLabel(order: OrderWithRelations) {
 
 function yesNo(value: boolean) {
   return value ? "Yes" : "No";
+}
+
+function firstDate(...dates: Array<Date | string | null | undefined>) {
+  return dates.find(Boolean) ?? null;
+}
+
+function compactWorkflowDate(date: Date | string | null | undefined) {
+  if (!date) return "Pending";
+  return dateTime(date);
+}
+
+function buildPersonalWorkflowSteps(order: OrderWithRelations): WorkflowDateStep[] {
+  return [
+    { label: "Ordered", completed: true, date: order.createdAt },
+    {
+      label: "Tracking submitted",
+      completed: order.adminSubmittedTrackingToWarehouse || order.adminSubmittedTrackingToBuyGroup || order.trackingSubmitted,
+      date: firstDate(order.adminSubmittedTrackingToWarehouseAt, order.adminSubmittedTrackingToBuyGroupAt, order.trackingSubmittedAt)
+    },
+    {
+      label: "Delivered",
+      completed: order.memberMarkedDelivered || order.delivered,
+      date: firstDate(order.memberMarkedDeliveredAt, order.deliveredAt)
+    },
+    {
+      label: "Scanned",
+      completed: order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned,
+      date: firstDate(order.adminMarkedScannedByWarehouseAt, order.warehouseScannedAt, order.scannedAt)
+    },
+    {
+      label: "Warehouse payout",
+      completed: order.adminReceivedPayoutFromWarehouse || order.buyGroupPaidAdmin || order.paidOut,
+      date: firstDate(order.adminReceivedPayoutFromWarehouseAt, order.buyGroupPaidAdminAt, order.paidOutAt)
+    },
+    { label: "Credit paid", completed: order.creditCardPaid, date: order.creditCardPaidAt },
+    {
+      label: "Done",
+      completed: order.profitReceived || order.adminPaidMember || order.memberPaid,
+      date: firstDate(order.profitReceivedAt, order.adminPaidMemberAt, order.memberPaidAt)
+    }
+  ];
+}
+
+function buildMemberWorkflowSteps(order: OrderWithRelations): WorkflowDateStep[] {
+  return [
+    { label: "Ordered / Tracking Needed", completed: true, date: order.createdAt },
+    {
+      label: "Tracking Sent to Admin",
+      completed: order.memberSubmittedTrackingToAdmin || !!order.trackingNumber,
+      date: firstDate(order.memberSubmittedTrackingToAdminAt, order.trackingAddedAt)
+    },
+    {
+      label: "Delivered",
+      completed: order.memberMarkedDelivered || order.delivered,
+      date: firstDate(order.memberMarkedDeliveredAt, order.deliveredAt)
+    },
+    {
+      label: "Scanned",
+      completed: order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned,
+      date: firstDate(order.adminMarkedScannedByWarehouseAt, order.warehouseScannedAt, order.scannedAt)
+    },
+    {
+      label: "Paid",
+      completed: order.adminPaidMember || order.memberPaid || order.profitReceived,
+      date: firstDate(order.adminPaidMemberAt, order.memberPaidAt, order.profitReceivedAt)
+    },
+    {
+      label: "Done",
+      completed: order.adminPaidMember || order.memberPaid || order.profitReceived,
+      date: firstDate(order.adminPaidMemberAt, order.memberPaidAt, order.profitReceivedAt)
+    }
+  ];
+}
+
+function buildAdminWorkflowSteps(order: OrderWithRelations): WorkflowDateStep[] {
+  return [
+    { label: "Waiting for Member Tracking", completed: true, date: order.createdAt },
+    {
+      label: "Tracking Received from Member",
+      completed: order.memberSubmittedTrackingToAdmin || !!order.trackingNumber,
+      date: firstDate(order.memberSubmittedTrackingToAdminAt, order.trackingAddedAt)
+    },
+    {
+      label: "Submitted to Warehouse",
+      completed: order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted,
+      date: firstDate(order.adminSubmittedTrackingToWarehouseAt, order.trackingSubmittedAt)
+    },
+    {
+      label: "Delivered by Member",
+      completed: order.memberMarkedDelivered || order.delivered,
+      date: firstDate(order.memberMarkedDeliveredAt, order.deliveredAt)
+    },
+    {
+      label: "Scanned by Warehouse",
+      completed: order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned,
+      date: firstDate(order.adminMarkedScannedByWarehouseAt, order.warehouseScannedAt, order.scannedAt)
+    },
+    {
+      label: "Paid Out from Warehouse",
+      completed: order.adminReceivedPayoutFromWarehouse || order.paidOut,
+      date: firstDate(order.adminReceivedPayoutFromWarehouseAt, order.paidOutAt)
+    },
+    {
+      label: "Paid to Member",
+      completed: order.adminPaidMember || order.memberPaid,
+      date: firstDate(order.adminPaidMemberAt, order.memberPaidAt)
+    },
+    {
+      label: "Done",
+      completed: order.adminPaidMember || order.memberPaid || order.profitReceived,
+      date: firstDate(order.adminPaidMemberAt, order.memberPaidAt, order.profitReceivedAt)
+    }
+  ];
+}
+
+function buildWorkflowSteps(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "admin") return buildAdminWorkflowSteps(order);
+  if (viewMode === "personal") return buildPersonalWorkflowSteps(order);
+  return buildMemberWorkflowSteps(order);
 }
 
 function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilter) {
@@ -342,6 +467,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
               warehouses={warehouses}
               workspaceMembers={workspaceMembers}
               isAdmin={isOperatorAdmin}
+              viewMode={isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member"}
               counts={counts}
               stage={stage}
               setStage={setStage}
@@ -608,13 +734,14 @@ function FilterBar({
   );
 }
 
-function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers, isAdmin, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, warehouseFilter, setWarehouseFilter, memberFilter, setMemberFilter, setSelectedOrder }: {
+function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers, isAdmin, viewMode, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, warehouseFilter, setWarehouseFilter, memberFilter, setMemberFilter, setSelectedOrder }: {
   orders: OrderWithRelations[];
   accounts: AmazonAccount[];
   buyGroups: BuyGroup[];
   warehouses: Warehouse[];
   workspaceMembers: WorkspaceMemberItem[];
   isAdmin: boolean;
+  viewMode: WorkflowViewMode;
   counts: Map<StageFilter, number>;
   stage: StageFilter;
   setStage: (value: StageFilter) => void;
@@ -656,16 +783,17 @@ function OrdersView({ orders, accounts, buyGroups, warehouses, workspaceMembers,
         </div>
       </div>
       <div className="space-y-3">
-        {orders.map((order) => <OrderQueueCard key={order.id} order={order} stage={stage} isAdmin={isAdmin} memberSafe={!isAdmin} onOpen={() => setSelectedOrder(order)} />)}
+        {orders.map((order) => <OrderQueueCard key={order.id} order={order} stage={stage} isAdmin={isAdmin} viewMode={viewMode} memberSafe={!isAdmin} onOpen={() => setSelectedOrder(order)} />)}
         {orders.length === 0 && <div className="rounded-lg border border-dashed border-line bg-panel/60 p-8 text-center text-muted">No orders in this queue.</div>}
       </div>
     </section>
   );
 }
 
-function OrderQueueCard({ order, stage, onOpen, isAdmin = false, memberSafe = false }: { order: OrderWithRelations; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; memberSafe?: boolean }) {
+function OrderQueueCard({ order, stage, onOpen, isAdmin = false, viewMode = "member", memberSafe = false }: { order: OrderWithRelations; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; viewMode?: WorkflowViewMode; memberSafe?: boolean }) {
   const financials = calculateFinancials(order);
   const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
+  const workflowSteps = buildWorkflowSteps(order, viewMode);
   const statusFields: Array<[string, string]> = isAdmin ? [
     ["Submitted by", memberName(order)],
     ["Member email", order.submittedBy?.email ?? "Unknown"],
@@ -759,6 +887,14 @@ function OrderQueueCard({ order, stage, onOpen, isAdmin = false, memberSafe = fa
             {(isAdmin ? statusFields : statusFields.concat(fieldsByStage[displayStage as OrderStage].slice(1, 5))).map(([label, value]) => (
               <span key={label} className="rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
                 {label}: <span className="text-white">{value}</span>
+              </span>
+            ))}
+          </div>
+          <div className="mt-3 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+            {workflowSteps.map((step) => (
+              <span key={step.label} className={cls("rounded-md border px-2.5 py-1.5 text-xs", step.completed ? "border-white/10 bg-white/[.06] text-slate-300" : "border-line bg-black/10 text-slate-500")}>
+                <span className="block truncate">{step.label}</span>
+                <span className={cls("mt-0.5 block truncate font-medium", step.completed && step.date ? "text-white" : "text-muted")}>{step.completed ? compactWorkflowDate(step.date) : "Pending"}</span>
               </span>
             ))}
           </div>
@@ -1217,7 +1353,7 @@ function TrackingNeededView({ orders }: { orders: OrderWithRelations[] }) {
   const trackingNeeded = orders.filter((order) => !order.trackingNumber);
   return (
     <div className="space-y-3">
-      {trackingNeeded.map((order) => <OrderQueueCard key={order.id} order={order} stage="ALL" isAdmin={false} memberSafe onOpen={() => undefined} />)}
+      {trackingNeeded.map((order) => <OrderQueueCard key={order.id} order={order} stage="ALL" isAdmin={false} viewMode="member" memberSafe onOpen={() => undefined} />)}
       {trackingNeeded.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">No ordered items need tracking.</div>}
     </div>
   );
