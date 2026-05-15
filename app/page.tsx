@@ -42,7 +42,7 @@ export default async function Home({ searchParams }: Props) {
             order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true } },
             member: true
           }
-        })
+        }).catch(() => [])
       : Promise.resolve([]),
     context.isAdmin && context.activeWorkspace.type === "OPERATOR"
       ? prisma.deliveryBeforeTrackingAlert.findMany({
@@ -59,7 +59,7 @@ export default async function Home({ searchParams }: Props) {
             order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true } },
             member: true
           }
-        })
+        }).catch(() => [])
       : Promise.resolve([])
   ]);
 
