@@ -41,9 +41,41 @@ export type Financials = {
   profit: number;
 };
 
-export function calculateFinancials(order: Pick<Order, "retailPrice" | "quantity" | "payoutPerUnit" | "chaseCashbackPercent" | "youngAdultEligible"> & { youngAdultBalanceUsed?: boolean }): Financials {
+export type PayoutBreakdown = {
+  warehousePayoutPerUnit: number;
+  warehouseTotalPayout: number;
+  memberPayoutPerUnit: number;
+  memberTotalPayout: number;
+  adminSpreadPerUnit: number;
+  adminTotalSpread: number;
+  adminSpreadPercent: number;
+};
+
+type PayoutFields = Pick<Order, "quantity" | "payoutPerUnit"> & {
+  warehousePayoutPerUnit?: number | null;
+  warehouseTotalPayout?: number | null;
+  memberPayoutPerUnit?: number | null;
+  memberTotalPayout?: number | null;
+  adminSpreadPerUnit?: number | null;
+  adminTotalSpread?: number | null;
+  adminSpreadPercent?: number | null;
+};
+
+export function calculatePayoutBreakdown(order: PayoutFields): PayoutBreakdown {
+  const warehousePayoutPerUnit = order.warehousePayoutPerUnit ?? order.payoutPerUnit;
+  const memberPayoutPerUnit = order.memberPayoutPerUnit ?? order.payoutPerUnit;
+  const warehouseTotalPayout = order.warehouseTotalPayout ?? warehousePayoutPerUnit * order.quantity;
+  const memberTotalPayout = order.memberTotalPayout ?? memberPayoutPerUnit * order.quantity;
+  const adminTotalSpread = order.adminTotalSpread ?? warehouseTotalPayout - memberTotalPayout;
+  const adminSpreadPerUnit = order.adminSpreadPerUnit ?? warehousePayoutPerUnit - memberPayoutPerUnit;
+  const adminSpreadPercent = warehouseTotalPayout > 0 ? adminTotalSpread / warehouseTotalPayout : order.adminSpreadPercent ?? 0;
+
+  return { warehousePayoutPerUnit, warehouseTotalPayout, memberPayoutPerUnit, memberTotalPayout, adminSpreadPerUnit, adminTotalSpread, adminSpreadPercent };
+}
+
+export function calculateFinancials(order: Pick<Order, "retailPrice" | "quantity" | "payoutPerUnit" | "chaseCashbackPercent" | "youngAdultEligible"> & { youngAdultBalanceUsed?: boolean; memberPayoutPerUnit?: number | null; memberTotalPayout?: number | null }): Financials {
   const totalPaid = order.retailPrice * order.quantity;
-  const totalPayout = order.payoutPerUnit * order.quantity;
+  const totalPayout = order.memberTotalPayout ?? (order.memberPayoutPerUnit ?? order.payoutPerUnit) * order.quantity;
   const chaseCashback = totalPaid * (order.chaseCashbackPercent / 100);
   const youngAdultCashback = order.youngAdultEligible ? totalPaid * 0.05 : 0;
   const youngAdultBalanceApplied = order.youngAdultBalanceUsed ? totalPaid : 0;

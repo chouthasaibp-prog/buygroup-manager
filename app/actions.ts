@@ -2,9 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { calculateFinancials, deriveStage } from "@/lib/domain";
+import { calculateFinancials, calculatePayoutBreakdown, deriveStage } from "@/lib/domain";
 import { createWorkspaceForProfile, ensureProfile, requireWorkspaceActionContext } from "@/lib/workspace";
-import type { Order, OrderStage, WorkspaceType } from "@prisma/client";
+import type { Order, OrderStage, PayoutMode, WorkspaceType } from "@prisma/client";
 
 const boolFromForm = (formData: FormData, key: string) => formData.get(key) === "on" || formData.get(key) === "true";
 const numberFromForm = (formData: FormData, key: string, fallback = 0) => Number(formData.get(key) || fallback);
@@ -28,6 +28,56 @@ const optionalAmazonTrackingNumber = (formData: FormData) => {
   if (!value) return null;
   return value.toUpperCase();
 };
+const payoutModeFromForm = (formData: FormData, fallback: PayoutMode = "PERCENT_SPREAD"): PayoutMode => {
+  const value = String(formData.get("payoutMode") ?? fallback);
+  return value === "MANUAL" ? "MANUAL" : "PERCENT_SPREAD";
+};
+function buildPayoutData({
+  formData,
+  quantity,
+  fallbackPayoutPerUnit = 0,
+  existing,
+  operatorAdmin
+}: {
+  formData: FormData;
+  quantity: number;
+  fallbackPayoutPerUnit?: number;
+  existing?: Order;
+  operatorAdmin: boolean;
+}) {
+  const defaultWarehouse = existing?.warehousePayoutPerUnit ?? existing?.payoutPerUnit ?? fallbackPayoutPerUnit;
+  const defaultMember = existing?.memberPayoutPerUnit ?? existing?.payoutPerUnit ?? fallbackPayoutPerUnit;
+  const payoutMode = operatorAdmin ? payoutModeFromForm(formData, existing?.payoutMode ?? "PERCENT_SPREAD") : existing?.payoutMode ?? "PERCENT_SPREAD";
+  const warehousePayoutPerUnit = operatorAdmin
+    ? numberFromForm(formData, "warehousePayoutPerUnit", defaultWarehouse)
+    : defaultMember;
+  const spreadPercent = operatorAdmin ? Math.max(0, numberFromForm(formData, "adminSpreadPercent", (existing?.adminSpreadPercent ?? 0.02) * 100)) / 100 : 0;
+  const percentMemberPayout = warehousePayoutPerUnit * (1 - spreadPercent);
+  const memberPayoutPerUnit = operatorAdmin
+    ? payoutMode === "MANUAL"
+      ? numberFromForm(formData, "memberPayoutPerUnit", existing?.memberPayoutPerUnit ?? percentMemberPayout)
+      : percentMemberPayout
+    : numberFromForm(formData, "payoutPerUnit", defaultMember);
+  const breakdown = calculatePayoutBreakdown({
+    quantity,
+    payoutPerUnit: memberPayoutPerUnit,
+    warehousePayoutPerUnit,
+    memberPayoutPerUnit,
+    memberTotalPayout: memberPayoutPerUnit * quantity
+  });
+
+  return {
+    payoutPerUnit: memberPayoutPerUnit,
+    warehousePayoutPerUnit,
+    warehouseTotalPayout: breakdown.warehouseTotalPayout,
+    memberPayoutPerUnit,
+    memberTotalPayout: breakdown.memberTotalPayout,
+    adminSpreadPerUnit: breakdown.adminSpreadPerUnit,
+    adminTotalSpread: breakdown.adminTotalSpread,
+    adminSpreadPercent: breakdown.adminSpreadPercent,
+    payoutMode
+  };
+}
 export type AddTrackingState = {
   error: string | null;
 };
@@ -145,6 +195,7 @@ async function createDeliveryBeforeTrackingAlert({
 export async function createOrder(formData: FormData) {
   const context = await requireWorkspaceActionContext(formData);
   const isPersonal = context.activeWorkspace.type === "PERSONAL";
+  const isOperatorAdmin = context.activeWorkspace.type === "OPERATOR" && context.isAdmin;
   const workspaceId = context.activeWorkspace.id;
   const chaseValue = String(formData.get("chaseCashbackPercent") ?? "0");
   const chaseCashbackPercent = chaseValue === "custom" ? numberFromForm(formData, "customChaseCashbackPercent") : Number(chaseValue);
@@ -152,6 +203,13 @@ export async function createOrder(formData: FormData) {
   const destinationId = await destinationIdForBuyGroup(workspaceId, buyGroupId);
   const trackingNumber = optionalAmazonTrackingNumber(formData);
   const amazonAccountId = await requireWorkspaceAmazonAccountId(workspaceId, optionalString(formData, "amazonAccountId"));
+  const quantity = Math.max(1, numberFromForm(formData, "quantity", 1));
+  const payoutData = buildPayoutData({
+    formData,
+    quantity,
+    fallbackPayoutPerUnit: numberFromForm(formData, isOperatorAdmin ? "warehousePayoutPerUnit" : "payoutPerUnit"),
+    operatorAdmin: isOperatorAdmin
+  });
 
   const order = await prisma.order.create({
     data: {
@@ -160,9 +218,9 @@ export async function createOrder(formData: FormData) {
       submittedByProfileId: context.profile.id,
       createdByProfileId: context.profile.id,
       itemName: String(formData.get("itemName") ?? "").trim() || "Untitled order",
-      quantity: Math.max(1, numberFromForm(formData, "quantity", 1)),
+      quantity,
       retailPrice: numberFromForm(formData, "retailPrice"),
-      payoutPerUnit: numberFromForm(formData, "payoutPerUnit"),
+      ...payoutData,
       chaseCashbackPercent,
       youngAdultEligible: boolFromForm(formData, "youngAdultEligible"),
       youngAdultBalanceUsed: boolFromForm(formData, "youngAdultBalanceUsed"),
@@ -224,15 +282,42 @@ export async function updateOrder(formData: FormData) {
   const buyGroupId = await requireWorkspaceBuyGroupId(workspaceId, optionalString(formData, "buyGroupId"));
   const destinationId = await destinationIdForBuyGroup(workspaceId, buyGroupId);
   const amazonAccountId = await requireWorkspaceAmazonAccountId(workspaceId, optionalString(formData, "amazonAccountId"));
-  const memberPayoutAmount = numberFromForm(formData, "memberPayoutAmount", existing.memberPayoutAmount ?? calculateFinancials(existing).amountOwed);
+  const quantity = Math.max(1, numberFromForm(formData, "quantity", existing.quantity));
+  const existingMemberPayoutPerUnit = existing.memberPayoutPerUnit ?? existing.payoutPerUnit;
+  const existingWarehousePayoutPerUnit = existing.warehousePayoutPerUnit ?? existing.payoutPerUnit;
+  const lockedMemberPayout = calculatePayoutBreakdown({
+    quantity,
+    payoutPerUnit: existingMemberPayoutPerUnit,
+    warehousePayoutPerUnit: existingWarehousePayoutPerUnit,
+    memberPayoutPerUnit: existingMemberPayoutPerUnit
+  });
+  const payoutData = isPersonal || isOperatorAdmin
+    ? buildPayoutData({
+        formData,
+        quantity,
+        existing,
+        operatorAdmin: isOperatorAdmin
+      })
+    : {
+        payoutPerUnit: existingMemberPayoutPerUnit,
+        warehousePayoutPerUnit: lockedMemberPayout.warehousePayoutPerUnit,
+        warehouseTotalPayout: lockedMemberPayout.warehouseTotalPayout,
+        memberPayoutPerUnit: lockedMemberPayout.memberPayoutPerUnit,
+        memberTotalPayout: lockedMemberPayout.memberTotalPayout,
+        adminSpreadPerUnit: lockedMemberPayout.adminSpreadPerUnit,
+        adminTotalSpread: lockedMemberPayout.adminTotalSpread,
+        adminSpreadPercent: lockedMemberPayout.adminSpreadPercent,
+        payoutMode: existing.payoutMode
+      };
+  const memberPayoutAmount = payoutData.memberTotalPayout ?? numberFromForm(formData, "memberPayoutAmount", existing.memberPayoutAmount ?? calculateFinancials(existing).amountOwed);
 
   const updated = await prisma.order.update({
     where: { id },
     data: {
       itemName: String(formData.get("itemName") ?? existing.itemName).trim() || existing.itemName,
-      quantity: Math.max(1, numberFromForm(formData, "quantity", existing.quantity)),
+      quantity,
       retailPrice: numberFromForm(formData, "retailPrice", existing.retailPrice),
-      payoutPerUnit: numberFromForm(formData, "payoutPerUnit", existing.payoutPerUnit),
+      ...payoutData,
       chaseCashbackPercent,
       youngAdultEligible: boolFromForm(formData, "youngAdultEligible"),
       youngAdultBalanceUsed: boolFromForm(formData, "youngAdultBalanceUsed"),
@@ -540,7 +625,7 @@ export async function quickAction(formData: FormData) {
     data.adminPaidMemberAt = now;
     data.creditCardPaid = true;
     data.creditCardPaidAt = now;
-    data.memberPayoutAmount = order.memberPayoutAmount ?? calculateFinancials(order).amountOwed;
+    data.memberPayoutAmount = order.memberPayoutAmount ?? order.memberTotalPayout ?? calculateFinancials(order).amountOwed;
   }
 
   if (!isPersonal && action === "memberConfirmPayment" && (order.adminPaidMember || order.memberPaid)) {

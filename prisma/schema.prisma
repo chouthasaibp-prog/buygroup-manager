@@ -19,6 +19,11 @@ enum OrderStage {
   PROFIT_RECEIVED
 }
 
+enum PayoutMode {
+  MANUAL
+  PERCENT_SPREAD
+}
+
 enum WorkspaceType {
   PERSONAL
   OPERATOR
@@ -150,6 +155,14 @@ model Order {
   quantity                           Int
   retailPrice                        Float
   payoutPerUnit                      Float
+  warehousePayoutPerUnit             Float?
+  warehouseTotalPayout               Float?
+  memberPayoutPerUnit                Float?
+  memberTotalPayout                  Float?
+  adminSpreadPerUnit                 Float?
+  adminTotalSpread                   Float?
+  adminSpreadPercent                 Float?
+  payoutMode                         PayoutMode     @default(PERCENT_SPREAD)
   chaseCashbackPercent               Float          @default(0)
   youngAdultEligible                 Boolean        @default(false)
   youngAdultBalanceUsed              Boolean        @default(false)

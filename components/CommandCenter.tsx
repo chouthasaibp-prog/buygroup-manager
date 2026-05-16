@@ -5,7 +5,7 @@ import type { AmazonAccount, BuyGroup, DeliveryBeforeTrackingAlert, OrderStage, 
 import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
 import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, reviewDeliveryBeforeTrackingAlert, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
-import { calculateFinancials, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
+import { calculateFinancials, calculatePayoutBreakdown, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
 type Props = {
   orders: OrderWithRelations[];
@@ -24,6 +24,11 @@ type Props = {
     amountOwed: number;
     realizedProfit: number;
     unrealizedProfit: number;
+    warehousePayoutExpected: number;
+    memberPayoutOwed: number;
+    adminSpreadRealized: number;
+    adminSpreadUnrealized: number;
+    expectedMemberPayout: number;
   };
   userEmail: string;
   profile: {
@@ -254,6 +259,10 @@ function adminWorkflowLabel(order: OrderWithRelations) {
 
 function yesNo(value: boolean) {
   return value ? "Yes" : "No";
+}
+
+function percent(value: number) {
+  return `${(value * 100).toFixed(2).replace(/\.00$/, "")}%`;
 }
 
 function firstDate(...dates: Array<Date | string | null | undefined>) {
@@ -709,7 +718,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
         </div>
       </section>
 
-      {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} onClose={() => setNewOrderOpen(false)} />}
+      {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} viewMode={viewMode} onClose={() => setNewOrderOpen(false)} />}
       {inboxOpen && (
         <div className="fixed inset-0 z-40 flex justify-end bg-black/45 backdrop-blur-sm" onClick={() => setInboxOpen(false)}>
           <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-cyan/20 bg-surface p-4 shadow-neon" onClick={(event) => event.stopPropagation()}>
@@ -760,11 +769,14 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
   ];
   const adminMetrics = [
     { label: "Open Orders", value: totals.openOrders.toString(), featured: true },
+    { label: "Warehouse Payout Expected", value: money(totals.warehousePayoutExpected), featured: true },
+    { label: "Member Payout Owed", value: money(totals.memberPayoutOwed), featured: true },
+    { label: "Admin Spread Realized", value: money(totals.adminSpreadRealized), featured: true },
+    { label: "Admin Spread Unrealized", value: money(totals.adminSpreadUnrealized), featured: true },
     { label: "Amount Owed", value: money(totals.amountOwed), featured: true },
     { label: "Realized Profit", value: money(totals.realizedProfit), featured: true },
     { label: "Unrealized Profit", value: money(totals.unrealizedProfit), featured: true },
     { label: "Overdue Reminders", value: totals.overdueReminders.toString(), featured: true },
-    { label: "Payout Expected", value: money(totals.totalPayout), featured: false },
     { label: "Total Spent", value: money(totals.totalSpent), featured: false },
     { label: "Total Cashback", value: money(totals.totalCashback), featured: false },
     { label: "Tracking Received from Member", value: orders.filter((order) => order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)).length.toString(), featured: false },
@@ -774,23 +786,26 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
   const memberFinancials = orders.reduce(
     (acc, order) => {
       const financials = calculateFinancials(order);
+      const payout = calculatePayoutBreakdown(order);
       const done = isMemberDone(order);
       const paymentConfirmed = order.memberConfirmedPayment || done;
 
       acc.totalSpent += financials.totalPaid;
       acc.totalCashback += financials.totalCashback;
-      if (!(order.adminPaidMember || order.memberPaid)) acc.amountOwedToMe += order.memberPayoutAmount ?? financials.amountOwed;
+      if (!done) acc.expectedMemberPayout += payout.memberTotalPayout;
+      if (!(order.adminPaidMember || order.memberPaid)) acc.amountOwedToMe += order.memberPayoutAmount ?? payout.memberTotalPayout;
       if (!done) acc.creditOwed += financials.totalPaid;
       if (paymentConfirmed) acc.realizedProfit += financials.profit;
       else acc.unrealizedProfit += financials.profit;
 
       return acc;
     },
-    { totalSpent: 0, totalCashback: 0, amountOwedToMe: 0, creditOwed: 0, realizedProfit: 0, unrealizedProfit: 0 }
+    { totalSpent: 0, totalCashback: 0, expectedMemberPayout: 0, amountOwedToMe: 0, creditOwed: 0, realizedProfit: 0, unrealizedProfit: 0 }
   );
   const memberMetricCount = (stage: StageFilter) => orders.filter((order) => matchesMemberStage(order, stage)).length.toString();
   const memberMetrics = [
     { label: "My Open Orders", value: totals.openOrders.toString(), featured: true },
+    { label: "Expected Payout To Member", value: money(memberFinancials.expectedMemberPayout), featured: true },
     { label: "Total Spent", value: money(memberFinancials.totalSpent), featured: true },
     { label: "Total Cashback", value: money(memberFinancials.totalCashback), featured: true },
     { label: "Realized Profit", value: money(memberFinancials.realizedProfit), featured: true },
@@ -1171,9 +1186,10 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
 
 function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, viewMode = "member", memberSafe = false }: { order: OrderWithRelations; alerts?: OrderCardAlert[]; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; viewMode?: WorkflowViewMode; memberSafe?: boolean }) {
   const financials = calculateFinancials(order);
+  const payout = calculatePayoutBreakdown(order);
   const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
   const workflowSteps = buildWorkflowSteps(order, viewMode);
-  const memberOwed = order.memberPayoutAmount ?? financials.amountOwed;
+  const memberOwed = order.memberPayoutAmount ?? payout.memberTotalPayout;
   const statusFields: Array<[string, string]> = viewMode === "personal" ? [
     ["Status", personalWorkflowLabel(order)],
     ["Tracking", order.trackingNumber ?? "Missing"],
@@ -1190,13 +1206,17 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Warehouse submission", order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted to warehouse" : "Not submitted to warehouse"],
     ["Member delivery", order.memberMarkedDelivered || order.delivered ? "Delivered by member" : "Not delivered by member"],
     ["Warehouse scan", order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned ? "Scanned by warehouse" : "Not scanned"],
-    ["Warehouse payout", order.adminReceivedPayoutFromWarehouse || order.paidOut ? "Received" : "Open"],
-    ["Paid to member", order.adminPaidMember || order.memberPaid ? "Paid" : "Open"]
+    ["Warehouse payout status", order.adminReceivedPayoutFromWarehouse || order.paidOut ? "Received" : "Open"],
+    ["Paid to member", order.adminPaidMember || order.memberPaid ? "Paid" : "Open"],
+    ["Warehouse payout", money(payout.warehouseTotalPayout)],
+    ["Member payout", money(payout.memberTotalPayout)],
+    ["Spread", money(payout.adminTotalSpread)]
   ] : [
     ["Status", memberWorkflowLabel(order)],
     ["Tracking", order.trackingNumber ?? "Missing"],
     ["Delivered", order.memberMarkedDelivered || order.delivered ? "Yes" : "No"],
     ["Scanned", order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned ? "Yes" : "No"],
+    ["Member payout", money(payout.memberTotalPayout)],
     ["Payment", order.memberConfirmedPayment ? "Credit owed" : order.adminPaidMember || order.memberPaid ? "Sent" : "Open"]
   ];
   const moneyFields: Array<[string, string]> = viewMode === "personal" && stage === "PAID_OUT" ? [
@@ -1205,7 +1225,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Credit / Amount Owed", money(financials.amountOwed)]
   ] : viewMode === "admin" && stage === "PAID_OUT" ? [
     ["Member", memberName(order)],
-    ["Warehouse payout", money(financials.totalPayout)],
+    ["Warehouse payout", money(payout.warehouseTotalPayout)],
     ["Owed to member", money(memberOwed)],
     ["Paid to member", order.adminPaidMember || order.memberPaid ? "Yes" : "No"]
   ] : [];
@@ -1218,7 +1238,8 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       ["Destination", order.buyGroup?.name ?? order.warehouse?.code ?? "Missing"],
       ["Order #", order.orderNumber ?? "Missing"],
       ["Retail", money(order.retailPrice)],
-      ["Payout", money(order.payoutPerUnit)],
+      [viewMode === "admin" ? "Warehouse Payout" : "Member Payout", money(viewMode === "admin" ? payout.warehousePayoutPerUnit : payout.memberPayoutPerUnit)],
+      ...(viewMode === "admin" ? [["Member Payout", money(payout.memberPayoutPerUnit)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
       ["Cashback", `${order.chaseCashbackPercent}%`],
       ["Est. Profit", money(financials.profit)],
       ["Created", shortDate(order.createdAt)]
@@ -1240,7 +1261,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     DELIVERED: [
       ["Group", order.buyGroup?.name ?? "Missing"],
       ["Delivered", shortDate(order.deliveredAt)],
-      ["Total Payout", money(financials.totalPayout)],
+      ["Member Payout", money(payout.memberTotalPayout)],
       ["Payout Due", shortDate(order.deliveredAt ? new Date(new Date(order.deliveredAt).getTime() + 2 * 86400000) : null)],
       ["Tracking", order.trackingNumber ?? "Missing"]
     ],
@@ -1254,6 +1275,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       ["Paid Out from Warehouse", shortDate(order.paidOutAt)],
       ["Amount Owed", money(financials.amountOwed)],
       ["Unrealized Profit", money(financials.profit)],
+      ...(viewMode === "admin" ? [["Warehouse Payout", money(payout.warehouseTotalPayout)], ["Member Payout", money(payout.memberTotalPayout)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
       ["Account", order.amazonAccount?.name ?? "Missing"],
       ["Card", order.creditCardPaid ? "Paid" : "Open"]
     ],
@@ -1265,7 +1287,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     PROFIT_RECEIVED: [
       ["Realized Profit", money(financials.profit)],
       ["Total Paid", money(financials.totalPaid)],
-      ["Total Payout", money(financials.totalPayout)],
+      ["Member Payout", money(payout.memberTotalPayout)],
       ["Done", shortDate(order.profitReceivedAt)],
       ["Account", order.amazonAccount?.name ?? "Missing"],
       ["Group", order.buyGroup?.name ?? "Missing"]
@@ -1456,12 +1478,12 @@ function SubmitTrackingForm({ order, viewMode }: { order: OrderWithRelations; vi
   );
 }
 
-function NewOrderModal({ accounts, buyGroups, workspaceId, onClose }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; onClose: () => void }) {
+function NewOrderModal({ accounts, buyGroups, workspaceId, viewMode, onClose }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; viewMode: WorkflowViewMode; onClose: () => void }) {
   return (
     <Modal title="New Order" onClose={onClose}>
       <form action={createOrder} className="grid gap-4" onSubmit={() => setTimeout(onClose, 100)}>
         <input type="hidden" name="workspaceId" value={workspaceId} />
-        <OrderFields accounts={accounts} buyGroups={buyGroups} />
+        <OrderFields accounts={accounts} buyGroups={buyGroups} viewMode={viewMode} />
         <div className="flex justify-end gap-2 border-t border-line pt-4">
           <button type="button" onClick={onClose} className="rounded-lg border border-line px-3 py-2 text-sm text-muted">Cancel</button>
           <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Create Order</button>
@@ -1473,6 +1495,7 @@ function NewOrderModal({ accounts, buyGroups, workspaceId, onClose }: { accounts
 
 function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, memberStatus, isAdmin, viewMode, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; workspaceName: string; memberStatus: string | null; isAdmin: boolean; viewMode: WorkflowViewMode; onClose: () => void }) {
   const financials = calculateFinancials(order);
+  const payout = calculatePayoutBreakdown(order);
   const timeline = viewMode === "personal" ? [
     ["Ordered", order.createdAt],
     ["Tracking submitted", order.trackingSubmittedAt ?? order.trackingAddedAt],
@@ -1501,14 +1524,14 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
         <form action={updateOrder} className="grid gap-4" onSubmit={() => setTimeout(onClose, 100)}>
           <input type="hidden" name="id" value={order.id} />
           <input type="hidden" name="workspaceId" value={workspaceId} />
-          <OrderFields accounts={accounts} buyGroups={buyGroups} order={order} lockTracking={isAdmin} />
+          <OrderFields accounts={accounts} buyGroups={buyGroups} order={order} lockTracking={isAdmin} viewMode={viewMode} />
           {viewMode === "admin" && (
             <div className="grid gap-3 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-2">
               <CheckField name="adminSubmittedTrackingToWarehouse" label="Submitted to warehouse" defaultChecked={order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted} />
               <CheckField name="adminMarkedScannedByWarehouse" label="Scanned by warehouse" defaultChecked={order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned} />
               <CheckField name="adminReceivedPayoutFromWarehouse" label="Paid out from warehouse" defaultChecked={order.adminReceivedPayoutFromWarehouse || order.buyGroupPaidAdmin || order.paidOut} />
               <CheckField name="adminPaidMember" label="Paid to member" defaultChecked={order.adminPaidMember || order.memberPaid} />
-              <Field label="Member payout amount"><input name="memberPayoutAmount" type="number" min="0" step="0.01" defaultValue={order.memberPayoutAmount ?? financials.amountOwed} className="w-full px-3 py-2 text-sm" /></Field>
+              <Field label="Member payout amount"><input name="memberPayoutAmount" type="number" min="0" step="0.01" defaultValue={order.memberPayoutAmount ?? payout.memberTotalPayout} className="w-full px-3 py-2 text-sm" /></Field>
               <Field label="Admin-only notes" wide><textarea name="internalAdminNotes" defaultValue={order.internalAdminNotes ?? ""} rows={3} className="w-full resize-none px-3 py-2 text-sm" /></Field>
             </div>
           )}
@@ -1566,7 +1589,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
                 <Fact label="Paid to member" value={order.adminPaidMember || order.memberPaid ? "Yes" : "No"} />
                 <Fact label="Member confirmed payment / credit owed" value={yesNo(order.memberConfirmedPayment)} />
                 <Fact label="Member marked done" value={yesNo(order.memberMarkedDone || order.profitReceived)} />
-                <Fact label="Member payout" value={money(order.memberPayoutAmount ?? financials.amountOwed)} />
+                <Fact label="Member payout" value={money(order.memberPayoutAmount ?? payout.memberTotalPayout)} />
               </>
             )}
           </div>
@@ -1574,7 +1597,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
             <div className="mb-3 text-sm font-semibold">Financials</div>
             {(viewMode === "personal" ? [
               ["Total Paid", money(financials.totalPaid)],
-              ["Total Payout", money(financials.totalPayout)],
+              ["Member Payout", money(payout.memberTotalPayout)],
               ["Chase Cashback", money(financials.chaseCashback)],
               ["Young Adult Cashback", money(financials.youngAdultCashback)],
               ["YA Balance Used", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
@@ -1583,7 +1606,10 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
             ] : isAdmin ? [
               ["Total Paid", money(financials.totalPaid)],
-              ["Total Payout", money(financials.totalPayout)],
+              ["Warehouse Payout", money(payout.warehouseTotalPayout)],
+              ["Member Payout", money(payout.memberTotalPayout)],
+              ["Admin Spread", money(payout.adminTotalSpread)],
+              ["Spread Percent", percent(payout.adminSpreadPercent)],
               ["Chase Cashback", money(financials.chaseCashback)],
               ["Young Adult Cashback", money(financials.youngAdultCashback)],
               ["YA Balance Used", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
@@ -1592,7 +1618,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Estimated Profit", money(financials.profit)],
               ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
             ] : [
-              ["Member payout", money(order.memberPayoutAmount ?? financials.amountOwed)],
+              ["Member payout", money(order.memberPayoutAmount ?? payout.memberTotalPayout)],
               ["Payment status", order.memberConfirmedPayment ? "Payment confirmed / credit owed" : order.adminPaidMember || order.memberPaid ? "Payment sent" : "Open"]
             ]).map(([label, value]) => <Fact key={label} label={label} value={value} />)}
           </div>
@@ -1623,7 +1649,11 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
   );
 }
 
-function OrderFields({ accounts, buyGroups, order, lockTracking = false }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; order?: OrderWithRelations; lockTracking?: boolean }) {
+function OrderFields({ accounts, buyGroups, order, lockTracking = false, viewMode }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; order?: OrderWithRelations; lockTracking?: boolean; viewMode: WorkflowViewMode }) {
+  const payout = order ? calculatePayoutBreakdown(order) : null;
+  const spreadInput = payout ? (payout.adminSpreadPercent * 100).toFixed(2).replace(/\.00$/, "") : "2";
+  const payoutMode = order?.payoutMode ?? "PERCENT_SPREAD";
+
   return (
     <div className="grid gap-4 md:grid-cols-2">
       <Field label="Item name"><input name="itemName" required defaultValue={order?.itemName ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
@@ -1641,7 +1671,21 @@ function OrderFields({ accounts, buyGroups, order, lockTracking = false }: { acc
         </select>
       </Field>
       <Field label="Retail price per unit"><input name="retailPrice" required type="number" min="0" step="0.01" defaultValue={order?.retailPrice ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
-      <Field label="Payout per unit"><input name="payoutPerUnit" required type="number" min="0" step="0.01" defaultValue={order?.payoutPerUnit ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+      {viewMode === "admin" ? (
+        <>
+          <Field label="Warehouse payout per unit"><input name="warehousePayoutPerUnit" required type="number" min="0" step="0.01" defaultValue={payout?.warehousePayoutPerUnit ?? order?.payoutPerUnit ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Payout mode">
+            <select name="payoutMode" defaultValue={payoutMode} className="w-full px-3 py-2 text-sm">
+              <option value="PERCENT_SPREAD">Percent spread</option>
+              <option value="MANUAL">Manual member payout</option>
+            </select>
+          </Field>
+          <Field label="Admin spread %"><input name="adminSpreadPercent" type="number" min="0" step="0.01" defaultValue={spreadInput} className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Member payout per unit"><input name="memberPayoutPerUnit" type="number" min="0" step="0.01" defaultValue={payout?.memberPayoutPerUnit ?? ""} placeholder="Auto from spread unless manual" className="w-full px-3 py-2 text-sm" /></Field>
+        </>
+      ) : (
+        <Field label={viewMode === "member" ? "Member payout per unit" : "Payout per unit"}><input name="payoutPerUnit" required type="number" min="0" step="0.01" defaultValue={payout?.memberPayoutPerUnit ?? order?.payoutPerUnit ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+      )}
       <Field label="Order number"><input name="orderNumber" defaultValue={order?.orderNumber ?? ""} placeholder="Ex: 114-3361283-3021808" inputMode="numeric" maxLength={19} pattern="\d{3}-\d{7}-\d{7}" title="Use the format 114-3361283-3021808" onInput={(event) => { event.currentTarget.value = formatAmazonOrderNumber(event.currentTarget.value); }} className="w-full px-3 py-2 text-sm" /></Field>
       <Field label="Tracking number"><input name="trackingNumber" defaultValue={order?.trackingNumber ?? ""} placeholder="Ex: TBA330706322941" disabled={lockTracking} onInput={(event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase(); }} className="w-full px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60" /></Field>
       <Field label="Chase cashback">
@@ -1679,8 +1723,8 @@ function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations
         ? order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived)
         : !(order.adminPaidMember || order.memberPaid)
     )
-    .map((order) => ({ order, financials: calculateFinancials(order) }));
-  const totalOwed = rows.reduce((sum, item) => sum + item.financials.amountOwed, 0);
+    .map((order) => ({ order, financials: calculateFinancials(order), payout: calculatePayoutBreakdown(order) }));
+  const totalOwed = rows.reduce((sum, item) => sum + (viewMode === "admin" ? item.payout.memberTotalPayout : item.financials.amountOwed), 0);
 
   return (
     <section className="rounded-lg border border-slate-400/30 bg-panel/80 p-4 shadow-glow">
@@ -1692,7 +1736,7 @@ function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations
         <div className="text-sm text-muted">{rows.length} open {rows.length === 1 ? "order" : "orders"}</div>
       </div>
       <div className="space-y-2">
-        {rows.slice(0, 12).map(({ order, financials }) => (
+        {rows.slice(0, 12).map(({ order, financials, payout }) => (
           <div key={order.id} className="grid gap-2 rounded-lg border border-line bg-surface/60 p-3 text-sm lg:grid-cols-[1.4fr_1fr_repeat(4,minmax(120px,.6fr))] lg:items-center">
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -1704,7 +1748,7 @@ function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations
             <div className="text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
             <Fact label="Total paid" value={money(financials.totalPaid)} />
             <Fact label="Cashback" value={money(financials.totalCashback)} />
-            <Fact label="Credit / owed" value={money(financials.amountOwed)} />
+            <Fact label={viewMode === "admin" ? "Member payout" : "Credit / owed"} value={money(viewMode === "admin" ? payout.memberTotalPayout : financials.amountOwed)} />
             <Fact label="Status" value={creditStatus(order, viewMode)} />
           </div>
         ))}
@@ -1891,8 +1935,8 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
   const members = groupOrdersByMember(orders);
   const openOrders = orders.filter((order) => !(order.adminPaidMember || order.memberPaid));
   const paidOrders = orders.filter((order) => order.adminPaidMember || order.memberPaid);
-  const totalOwed = openOrders.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculateFinancials(order).amountOwed), 0);
-  const totalPaid = paidOrders.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculateFinancials(order).amountOwed), 0);
+  const totalOwed = openOrders.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), 0);
+  const totalPaid = paidOrders.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), 0);
 
   return (
     <div className="space-y-4">
@@ -1921,7 +1965,8 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
           <div className="space-y-2">
             {member.orders.map((order) => {
               const financials = calculateFinancials(order);
-              const owedToMember = order.memberPayoutAmount ?? financials.amountOwed;
+              const payout = calculatePayoutBreakdown(order);
+              const owedToMember = order.memberPayoutAmount ?? payout.memberTotalPayout;
               const paidToMember = order.adminPaidMember || order.memberPaid;
               const status = paidToMember
                 ? order.memberConfirmedPayment ? "Confirmed by member" : "Paid, awaiting confirmation"
@@ -1981,7 +2026,7 @@ function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
       <div className="grid gap-4 md:grid-cols-4">
       <div className="rounded-lg border border-green-400/20 bg-panel/80 p-4 shadow-glow">
         <div className="text-xs uppercase tracking-[.12em] text-muted">Amount Owed To Me</div>
-        <div className="mt-2 text-3xl font-semibold">{money(unpaid.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculateFinancials(order).amountOwed), 0))}</div>
+        <div className="mt-2 text-3xl font-semibold">{money(unpaid.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), 0))}</div>
       </div>
       <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
         <div className="text-xs uppercase tracking-[.12em] text-muted">Payment Sent</div>
@@ -2003,7 +2048,7 @@ function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
             <input type="hidden" name="id" value={order.id} />
             <input type="hidden" name="action" value="memberConfirmPayment" />
             <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm"><span className="truncate">{order.itemName}</span><YoungAdultBalanceBadge order={order} /></span>
-            <span className="text-sm text-muted">{money(order.memberPayoutAmount ?? calculateFinancials(order).amountOwed)}</span>
+            <span className="text-sm text-muted">{money(order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout)}</span>
             <button className="rounded-md border border-blue-300/40 px-2.5 py-1.5 text-xs text-blue-100">Confirm Payment</button>
           </form>
         ))}
@@ -2028,7 +2073,7 @@ function groupOrdersByMember(orders: OrderWithRelations[]) {
     const id = order.submittedBy?.id ?? "unknown";
     const name = memberName(order);
     const existing = map.get(id) ?? { id, name, orders: [], unpaid: 0, paid: 0 };
-    const amount = order.memberPayoutAmount ?? calculateFinancials(order).amountOwed;
+    const amount = order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout;
     existing.orders.push(order);
     if (order.adminPaidMember || order.memberPaid) existing.paid += amount;
     else existing.unpaid += amount;

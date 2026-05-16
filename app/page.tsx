@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import type { OrderStage } from "@prisma/client";
-import { buildReminders, calculateFinancials } from "@/lib/domain";
+import { buildReminders, calculateFinancials, calculatePayoutBreakdown } from "@/lib/domain";
 import { displayProfileName, getWorkspaceContext, orderVisibilityWhere } from "@/lib/workspace";
 import CommandCenter from "@/components/CommandCenter";
 
@@ -63,8 +63,22 @@ export default async function Home({ searchParams }: Props) {
       : Promise.resolve([])
   ]);
 
-  const visibleOrders = context.isAdmin ? orders : orders.map((order) => ({
-    ...order,
+  const visibleOrders = context.isAdmin ? orders : orders.map((order) => {
+    const memberPayoutPerUnit = order.memberPayoutPerUnit ?? order.payoutPerUnit;
+    const memberTotalPayout = order.memberTotalPayout ?? memberPayoutPerUnit * order.quantity;
+
+    return {
+      ...order,
+      payoutPerUnit: memberPayoutPerUnit,
+      warehousePayoutPerUnit: null,
+      warehouseTotalPayout: null,
+      memberPayoutPerUnit,
+      memberTotalPayout,
+      adminSpreadPerUnit: null,
+      adminTotalSpread: null,
+      adminSpreadPercent: null,
+      adminProfit: null,
+      adminMargin: null,
     trackingSubmitted: false,
     trackingSubmittedAt: null,
     scanned: false,
@@ -92,8 +106,7 @@ export default async function Home({ searchParams }: Props) {
     adminReceivedPayoutFromWarehouseAt: null,
     adminPaidMember: order.adminPaidMember || order.memberPaid,
     adminPaidMemberAt: order.adminPaidMember || order.memberPaid ? order.adminPaidMemberAt ?? order.memberPaidAt : null,
-    adminProfit: null,
-    adminMargin: null,
+    memberPayoutAmount: order.memberPayoutAmount ?? memberTotalPayout,
     currentStage: (order.memberMarkedDone || order.profitReceived
       ? "PROFIT_RECEIVED"
       : order.adminMarkedScannedByWarehouse || order.warehouseScanned
@@ -103,17 +116,27 @@ export default async function Home({ searchParams }: Props) {
           : order.trackingNumber
             ? "TRACKING_READY"
             : "ORDERED") as OrderStage
-  }));
+    };
+  });
   const reminders = buildReminders(visibleOrders);
   const openOrders = visibleOrders.filter((order) => !order.profitReceived);
   const totals = visibleOrders.reduce(
     (acc, order) => {
       const financials = calculateFinancials(order);
+      const payout = calculatePayoutBreakdown(order);
       if (!order.profitReceived) {
         acc.totalSpent += financials.totalPaid;
-        acc.totalPayout += financials.totalPayout;
+        acc.totalPayout += context.isAdmin && context.activeWorkspace.type === "OPERATOR" ? payout.warehouseTotalPayout : financials.totalPayout;
+        acc.warehousePayoutExpected += context.isAdmin && context.activeWorkspace.type === "OPERATOR" ? payout.warehouseTotalPayout : financials.totalPayout;
+        acc.memberPayoutOwed += payout.memberTotalPayout;
+        acc.expectedMemberPayout += payout.memberTotalPayout;
         acc.totalCashback += financials.totalCashback;
         acc.amountOwed += financials.amountOwed;
+      }
+
+      if (context.isAdmin && context.activeWorkspace.type === "OPERATOR") {
+        if (order.adminPaidMember || order.memberPaid || order.profitReceived) acc.adminSpreadRealized += payout.adminTotalSpread;
+        else acc.adminSpreadUnrealized += payout.adminTotalSpread;
       }
 
       if (order.creditCardPaid) {
@@ -124,7 +147,7 @@ export default async function Home({ searchParams }: Props) {
 
       return acc;
     },
-    { totalSpent: 0, totalPayout: 0, totalCashback: 0, amountOwed: 0, realizedProfit: 0, unrealizedProfit: 0 }
+    { totalSpent: 0, totalPayout: 0, totalCashback: 0, amountOwed: 0, realizedProfit: 0, unrealizedProfit: 0, warehousePayoutExpected: 0, memberPayoutOwed: 0, adminSpreadRealized: 0, adminSpreadUnrealized: 0, expectedMemberPayout: 0 }
   );
 
   return (
