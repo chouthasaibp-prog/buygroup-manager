@@ -293,12 +293,12 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
         { label: "Quantity", value: String(order.quantity) },
         { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
         { label: viewMode === "admin" ? "Member payout" : "Payout", value: money(financials.totalPayout) },
-        { label: "Cashback", value: money(financials.chaseCashback) },
-        { label: "Young Adult cashback", value: money(financials.youngAdultCashback) },
+        { label: "Chase cashback", value: money(financials.chaseCashback) },
+        { label: "Young Adult cashback profit", value: money(financials.youngAdultCashback) },
         { label: "Credit owed", value: money(financials.amountOwed) },
         { label: "Profit status", value: order.creditCardPaid || order.memberConfirmedPayment || order.profitReceived ? "Realized" : "Unrealized" }
       ],
-      formula: "Profit = payout - credit owed",
+      formula: "Profit = payout - credit owed + Young Adult cashback",
       finalLabel: "Final profit",
       finalValue: money(value ?? financials.profit),
       note
@@ -312,11 +312,11 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
         { label: "Retail per unit", value: money(order.retailPrice) },
         { label: "Quantity", value: String(order.quantity) },
         { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
-        { label: "Cashback rate", value: order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%` },
-        { label: "Cashback", value: money(financials.chaseCashback) },
+        { label: "Chase cashback rate", value: order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%` },
+        { label: "Chase cashback", value: money(financials.chaseCashback) },
         { label: "Young Adult cashback", value: money(financials.youngAdultCashback) }
       ],
-      formula: "Total cashback = cashback + Young Adult cashback",
+      formula: "Total cashback = Chase cashback + Young Adult cashback",
       finalLabel: "Final cashback",
       finalValue: money(value ?? financials.totalCashback),
       note
@@ -343,15 +343,15 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
       { label: "Retail per unit", value: money(order.retailPrice) },
       { label: "Quantity", value: String(order.quantity) },
       { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
-      { label: "Cashback", value: money(financials.chaseCashback) },
-      { label: "Young Adult cashback", value: money(financials.youngAdultCashback) },
+      { label: "Chase cashback", value: money(financials.chaseCashback) },
+      { label: "Young Adult cashback profit", value: money(financials.youngAdultCashback) },
       ...(order.youngAdultBalanceUsed ? [{ label: "Used YA balance adjustment", value: `-${money(financials.youngAdultBalanceApplied)}` }] : []),
       ...(viewMode === "member" ? [{ label: "Amount paid by admin / member payout", value: money(memberPayout) }] : [])
     ],
-    formula: order.youngAdultBalanceUsed ? "Credit owed = 0 because payment used previously earned YA balance" : "Credit owed = total paid - cashback - Young Adult cashback",
+    formula: order.youngAdultBalanceUsed ? "Credit owed = 0 because payment used previously earned YA balance" : "Credit owed = total retail - Chase cashback",
     finalLabel: "Final credit owed",
     finalValue: money(value ?? financials.amountOwed),
-    note
+    note: note ?? "Young Adult cashback is profit only, not a credit reduction."
   };
 }
 
@@ -399,16 +399,16 @@ function aggregateBreakdown(label: string, orders: OrderWithRelations[], viewMod
     subtitle: `${rows.length} ${rows.length === 1 ? "order" : "orders"}`,
     lines: [
       { label: "Retail total", value: money(totalPaid) },
-      { label: "Cashback", value: money(cashback) },
-      { label: "Young Adult cashback", value: money(yaCashback) },
+      { label: "Chase cashback", value: money(cashback) },
+      { label: "Young Adult cashback profit", value: money(yaCashback) },
       ...(yaBalance > 0 ? [{ label: "Used YA balance adjustment", value: `-${money(yaBalance)}` }] : []),
       ...(normalized.includes("payout") || normalized.includes("owed to me") || normalized.includes("profit") ? [{ label: viewMode === "member" ? "Member payout" : "Payout", value: money(payout) }] : []),
       ...(normalized.includes("profit") || normalized.includes("credit") || normalized.includes("owed") ? [{ label: "Credit owed", value: money(creditOwed) }] : [])
     ],
-    formula: normalized.includes("profit") ? "Profit = payout - credit owed" : normalized.includes("cashback") ? "Total cashback = cashback + Young Adult cashback" : normalized.includes("total spent") ? "Total spent = sum of retail per unit x quantity" : normalized.includes("payout") || normalized.includes("owed to me") ? "Member payout = sum of member payout amounts" : "Credit owed = total paid - cashback - Young Adult cashback",
+    formula: normalized.includes("profit") ? "Profit = payout - credit owed + Young Adult cashback" : normalized.includes("cashback") ? "Total cashback = Chase cashback + Young Adult cashback" : normalized.includes("total spent") ? "Total spent = sum of retail per unit x quantity" : normalized.includes("payout") || normalized.includes("owed to me") ? "Member payout = sum of member payout amounts" : "Credit owed = total retail - Chase cashback",
     finalLabel: label,
     finalValue,
-    note: yaBalance > 0 ? "Paid with YA Balance: no new cashback/profit/credit owed counted." : undefined
+    note: yaBalance > 0 ? "Paid with YA Balance: no new cashback/profit/credit owed counted." : normalized.includes("credit") || normalized.includes("owed") ? "Young Adult cashback is profit only, not a credit reduction." : undefined
   };
 }
 
@@ -685,7 +685,7 @@ function reminderLabel(reminder: Reminder) {
   if (reminder.type === "missing_amazon_account") return "Amazon account missing";
   if (reminder.type === "missing_buy_group") return "Buy group / destination missing";
   if (reminder.type === "missing_info") return reminder.notes ?? "Missing order info";
-  if (reminder.type === "submit_tracking") return reminder.order.trackingNumber ? "Tracking needs warehouse submission" : "Tracking missing";
+  if (reminder.type === "submit_tracking") return reminder.order.trackingNumber ? reminder.action : "Tracking missing";
   if (reminder.type === "check_payout") return "Payout reminder";
   if (reminder.type === "pay_credit_card") return "Payment reminder";
   return reminder.label;
@@ -742,7 +742,8 @@ function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewM
     }
   }
 
-  for (const reminder of reminders.filter((item) => item.order.id === order.id && !isDoneReminder(item))) {
+  const adminOnlyReminderTypes: Reminder["type"][] = ["check_payout", "pay_credit_card"];
+  for (const reminder of reminders.filter((item) => item.order.id === order.id && !isDoneReminder(item) && (viewMode !== "member" || !adminOnlyReminderTypes.includes(item.type)))) {
     alerts.push({
       id: reminder.id,
       kind: "reminder",
@@ -820,7 +821,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
-  const visibleReminders = reminders.filter((reminder) => !isDoneReminder(reminder));
+  const visibleReminders = reminders.filter((reminder) => !isDoneReminder(reminder) && (viewMode !== "member" || !["submit_tracking", "check_payout", "pay_credit_card"].includes(reminder.type)));
   const [section, setSection] = useState<string>("dashboard");
   const [stage, setStage] = useState<StageFilter>("ALL");
   const [query, setQuery] = useState("");
@@ -2096,7 +2097,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
             ] : [
               ["Member payout", money(order.memberPayoutAmount ?? payout.memberTotalPayout)],
               ["Total Paid", money(financials.totalPaid)],
-              ["Cashback", money(financials.totalCashback)],
+              ["Total Cashback", money(financials.totalCashback)],
               ["Young Adult Cashback", money(financials.youngAdultCashback)],
               ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Credit / Amount Owed", money(financials.amountOwed)],
