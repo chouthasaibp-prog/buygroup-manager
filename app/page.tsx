@@ -10,17 +10,34 @@ type Props = {
   searchParams: Promise<{ workspace?: string }>;
 };
 
+const orderInclude = { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true } as const;
+const orderIncludeWithoutReminderState = { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true } as const;
+
+async function findOrdersWithReminderStateFallback(where: ReturnType<typeof orderVisibilityWhere>) {
+  try {
+    return await prisma.order.findMany({
+      where,
+      orderBy: [{ updatedAt: "desc" }],
+      include: orderInclude
+    });
+  } catch (error) {
+    console.error("ReminderState relation failed while loading orders; falling back without reminder state.", error);
+    const orders = await prisma.order.findMany({
+      where,
+      orderBy: [{ updatedAt: "desc" }],
+      include: orderIncludeWithoutReminderState
+    });
+    return orders.map((order) => ({ ...order, reminderStates: [] }));
+  }
+}
+
 export default async function Home({ searchParams }: Props) {
   const params = await searchParams;
   const context = await getWorkspaceContext(params.workspace);
   const workspaceWhere = { workspaceId: context.activeWorkspace.id };
   const orderWhere = orderVisibilityWhere(context);
   const [orders, accounts, buyGroups, warehouses, workspaceMembers, trackingChangeAlerts, deliveryBeforeTrackingAlerts] = await Promise.all([
-    prisma.order.findMany({
-      where: orderWhere,
-      orderBy: [{ updatedAt: "desc" }],
-      include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true }
-    }),
+    findOrdersWithReminderStateFallback(orderWhere),
     prisma.amazonAccount.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
     prisma.buyGroup.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
     prisma.warehouse.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
@@ -43,7 +60,7 @@ export default async function Home({ searchParams }: Props) {
           },
           orderBy: { changedAt: "desc" },
           include: {
-            order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true } },
+            order: { include: orderInclude },
             member: true
           }
         }).catch(() => [])
@@ -60,7 +77,7 @@ export default async function Home({ searchParams }: Props) {
           },
           orderBy: { deliveredAt: "asc" },
           include: {
-            order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true } },
+            order: { include: orderInclude },
             member: true
           }
         }).catch(() => [])
