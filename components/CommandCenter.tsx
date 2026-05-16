@@ -153,8 +153,7 @@ const operatorMemberNav = [
   { key: "dashboard", label: "My Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "My Orders", icon: Package },
   { key: "trackingNeeded", label: "Ordered / Tracking Needed", icon: Upload },
-  { key: "accounts", label: "Credit Owed", icon: CreditCard },
-  { key: "memberAccounts", label: "Amazon Accounts / Credit Accounts", icon: Landmark },
+  { key: "accounts", label: "Credit / Accounts", icon: CreditCard },
   { key: "buyGroups", label: "Buy Groups / Destinations", icon: Landmark },
   { key: "myPayouts", label: "My Payouts", icon: CreditCard },
   { key: "analytics", label: "Analytics", icon: Bell },
@@ -687,7 +686,6 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
             />
           )}
           {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
-          {section === "memberAccounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
           {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} />}
           {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
           {section === "queues" && (
