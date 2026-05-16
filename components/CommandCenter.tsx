@@ -1,9 +1,9 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, DeliveryBeforeTrackingAlert, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
 import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, reviewDeliveryBeforeTrackingAlert, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
+import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, reviewDeliveryBeforeTrackingAlert, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, calculatePayoutBreakdown, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
@@ -209,8 +209,8 @@ function metricTone(label: string) {
 function YoungAdultBalanceBadge({ order }: { order: OrderWithRelations }) {
   if (!order.youngAdultBalanceUsed) return null;
   return (
-    <span className="inline-flex items-center rounded-md border border-fuchsia-300/35 bg-fuchsia-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-[.12em] text-fuchsia-100">
-      YA Balance Used
+    <span title="Previously earned cashback already accounted for." className="inline-flex items-center rounded-md border border-fuchsia-300/35 bg-fuchsia-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-[.12em] text-fuchsia-100">
+      Paid with YA Balance
     </span>
   );
 }
@@ -261,10 +261,6 @@ function adminWorkflowLabel(order: OrderWithRelations) {
 
 function yesNo(value: boolean) {
   return value ? "Yes" : "No";
-}
-
-function percent(value: number) {
-  return `${(value * 100).toFixed(2).replace(/\.00$/, "")}%`;
 }
 
 function firstDate(...dates: Array<Date | string | null | undefined>) {
@@ -667,6 +663,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
               buyGroups={buyGroups}
               warehouses={warehouses}
               workspaceMembers={workspaceMembers}
+              workspaceId={activeWorkspace.id}
               isAdmin={isOperatorAdmin}
               viewMode={viewMode}
               counts={counts}
@@ -796,7 +793,7 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
       acc.totalCashback += financials.totalCashback;
       if (!done) acc.expectedMemberPayout += payout.memberTotalPayout;
       if (!(order.adminPaidMember || order.memberPaid)) acc.amountOwedToMe += order.memberPayoutAmount ?? payout.memberTotalPayout;
-      if (!done) acc.creditOwed += financials.totalPaid;
+      if (!done) acc.creditOwed += financials.amountOwed;
       if (paymentConfirmed) acc.realizedProfit += financials.profit;
       else acc.unrealizedProfit += financials.profit;
 
@@ -1116,7 +1113,7 @@ function FilterBar({
   );
 }
 
-function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, accounts, buyGroups, warehouses, workspaceMembers, isAdmin, viewMode, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, warehouseFilter, setWarehouseFilter, memberFilter, setMemberFilter, setSelectedOrder }: {
+function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, accounts, buyGroups, warehouses, workspaceMembers, workspaceId, isAdmin, viewMode, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, warehouseFilter, setWarehouseFilter, memberFilter, setMemberFilter, setSelectedOrder }: {
   orders: OrderWithRelations[];
   reminders: Reminder[];
   trackingChangeAlerts: TrackingChangeAlertItem[];
@@ -1125,6 +1122,7 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
   buyGroups: BuyGroup[];
   warehouses: Warehouse[];
   workspaceMembers: WorkspaceMemberItem[];
+  workspaceId: string;
   isAdmin: boolean;
   viewMode: WorkflowViewMode;
   counts: Map<StageFilter, number>;
@@ -1143,6 +1141,36 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
   setSelectedOrder: (order: OrderWithRelations) => void;
 }) {
   const workflowTabs = viewMode === "admin" ? adminStages : viewMode === "personal" ? personalStages : memberStages;
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(() => new Set());
+  const visibleOrderIds = useMemo(() => orders.map((order) => order.id), [orders]);
+  const selectedCount = selectedOrderIds.size;
+  const allVisibleSelected = visibleOrderIds.length > 0 && visibleOrderIds.every((id) => selectedOrderIds.has(id));
+
+  useEffect(() => {
+    setSelectedOrderIds((current) => {
+      const visibleIds = new Set(visibleOrderIds);
+      const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [visibleOrderIds]);
+
+  const toggleOrderSelection = (id: string, selected: boolean) => {
+    setSelectedOrderIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllVisible = () => {
+    setSelectedOrderIds((current) => {
+      if (allVisibleSelected) return new Set();
+      const next = new Set(current);
+      visibleOrderIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
   return (
     <section>
       <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -1167,6 +1195,31 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
           <FilterBar query={query} setQuery={setQuery} accountFilter={accountFilter} setAccountFilter={setAccountFilter} buyGroupFilter={buyGroupFilter} setBuyGroupFilter={setBuyGroupFilter} warehouseFilter={warehouseFilter} setWarehouseFilter={setWarehouseFilter} memberFilter={memberFilter} setMemberFilter={setMemberFilter} accounts={accounts} buyGroups={buyGroups} warehouses={warehouses} workspaceMembers={workspaceMembers} showMemberFilter={isAdmin} />
         </div>
       </div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-panel/70 px-3 py-2">
+        <label className="flex items-center gap-2 text-sm text-muted">
+          <input type="checkbox" checked={allVisibleSelected} disabled={visibleOrderIds.length === 0} onChange={toggleAllVisible} className="h-4 w-4" />
+          Select all visible
+        </label>
+        {selectedCount > 0 && (
+          <form
+            action={deleteOrders}
+            onSubmit={(event) => {
+              if (!window.confirm("Delete selected orders?")) {
+                event.preventDefault();
+                return;
+              }
+              setTimeout(() => setSelectedOrderIds(new Set()), 100);
+            }}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <input type="hidden" name="workspaceId" value={workspaceId} />
+            {Array.from(selectedOrderIds).map((id) => <input key={id} type="hidden" name="orderIds" value={id} />)}
+            <span className="text-sm text-white">{selectedCount} selected</span>
+            <button className="rounded-md border border-red-300/45 bg-red-500/15 px-3 py-1.5 text-sm font-medium text-red-100 hover:bg-red-500/25">Delete selected</button>
+            <button type="button" onClick={() => setSelectedOrderIds(new Set())} className="rounded-md border border-line px-3 py-1.5 text-sm text-muted hover:text-white">Clear selection</button>
+          </form>
+        )}
+      </div>
       <div className="space-y-3">
         {orders.map((order) => (
           <OrderQueueCard
@@ -1177,6 +1230,8 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
             isAdmin={isAdmin}
             viewMode={viewMode}
             memberSafe={!isAdmin}
+            selected={selectedOrderIds.has(order.id)}
+            onSelect={(selected) => toggleOrderSelection(order.id, selected)}
             onOpen={() => setSelectedOrder(order)}
           />
         ))}
@@ -1186,7 +1241,7 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
   );
 }
 
-function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, viewMode = "member", memberSafe = false }: { order: OrderWithRelations; alerts?: OrderCardAlert[]; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; viewMode?: WorkflowViewMode; memberSafe?: boolean }) {
+function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, viewMode = "member", memberSafe = false, selected = false, onSelect }: { order: OrderWithRelations; alerts?: OrderCardAlert[]; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; viewMode?: WorkflowViewMode; memberSafe?: boolean; selected?: boolean; onSelect?: (selected: boolean) => void }) {
   const financials = calculateFinancials(order);
   const payout = calculatePayoutBreakdown(order);
   const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
@@ -1242,7 +1297,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       ["Retail", money(order.retailPrice)],
       [viewMode === "admin" ? "Warehouse Payout" : "Member Payout", money(viewMode === "admin" ? payout.warehousePayoutPerUnit : payout.memberPayoutPerUnit)],
       ...(viewMode === "admin" ? [["Member Payout", money(payout.memberPayoutPerUnit)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
-      ["Cashback", `${order.chaseCashbackPercent}%`],
+      ["Cashback", order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%`],
       ["Est. Profit", money(financials.profit)],
       ["Created", shortDate(order.createdAt)]
     ],
@@ -1299,6 +1354,12 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
   return (
     <article className={cls("rounded-lg border bg-panel/80 p-4 shadow-glow transition hover:-translate-y-0.5 hover:shadow-neon", stageTone[order.currentStage], order.youngAdultBalanceUsed && "ring-1 ring-fuchsia-300/25")}>
       <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between">
+        {onSelect && (
+          <label className="flex items-center gap-2 self-start rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
+            <input type="checkbox" checked={selected} onChange={(event) => onSelect(event.currentTarget.checked)} className="h-4 w-4" />
+            Select
+          </label>
+        )}
         <button onClick={onOpen} className="min-w-0 text-left xl:flex-1">
           <div className="flex items-center gap-2">
             <h3 className="truncate font-semibold">{order.itemName}</h3>
@@ -1602,7 +1663,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Member Payout", money(payout.memberTotalPayout)],
               ["Chase Cashback", money(financials.chaseCashback)],
               ["Young Adult Cashback", money(financials.youngAdultCashback)],
-              ["YA Balance Used", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
+              ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Amount Owed", money(financials.amountOwed)],
               ["Estimated Profit", money(financials.profit)],
               ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
@@ -1611,10 +1672,9 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Warehouse Payout", money(payout.warehouseTotalPayout)],
               ["Member Payout", money(payout.memberTotalPayout)],
               ["Admin Spread", money(payout.adminTotalSpread)],
-              ["Spread Percent", percent(payout.adminSpreadPercent)],
               ["Chase Cashback", money(financials.chaseCashback)],
               ["Young Adult Cashback", money(financials.youngAdultCashback)],
-              ["YA Balance Used", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
+              ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Total Cashback", money(financials.totalCashback)],
               ["Credit / Amount Owed", money(financials.amountOwed)],
               ["Estimated Profit", money(financials.profit)],
@@ -1653,8 +1713,6 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
 
 function OrderFields({ accounts, buyGroups, order, lockTracking = false, viewMode }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; order?: OrderWithRelations; lockTracking?: boolean; viewMode: WorkflowViewMode }) {
   const payout = order ? calculatePayoutBreakdown(order) : null;
-  const spreadInput = payout ? (payout.adminSpreadPercent * 100).toFixed(2).replace(/\.00$/, "") : "2";
-  const payoutMode = order?.payoutMode ?? "PERCENT_SPREAD";
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -1676,14 +1734,9 @@ function OrderFields({ accounts, buyGroups, order, lockTracking = false, viewMod
       {viewMode === "admin" ? (
         <>
           <Field label="Warehouse payout per unit"><input name="warehousePayoutPerUnit" required type="number" min="0" step="0.01" defaultValue={payout?.warehousePayoutPerUnit ?? order?.payoutPerUnit ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
-          <Field label="Payout mode">
-            <select name="payoutMode" defaultValue={payoutMode} className="w-full px-3 py-2 text-sm">
-              <option value="PERCENT_SPREAD">Percent spread</option>
-              <option value="MANUAL">Manual member payout</option>
-            </select>
-          </Field>
-          <Field label="Admin spread %"><input name="adminSpreadPercent" type="number" min="0" step="0.01" defaultValue={spreadInput} className="w-full px-3 py-2 text-sm" /></Field>
-          <Field label="Member payout per unit"><input name="memberPayoutPerUnit" type="number" min="0" step="0.01" defaultValue={payout?.memberPayoutPerUnit ?? ""} placeholder="Auto from spread unless manual" className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Member payout per unit"><input name="memberPayoutPerUnit" required type="number" min="0" step="0.01" defaultValue={payout?.memberPayoutPerUnit ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+          <Fact label="Calculated spread per unit" value={money(payout?.adminSpreadPerUnit ?? 0)} />
+          <Fact label="Calculated total spread" value={money(payout?.adminTotalSpread ?? 0)} />
         </>
       ) : (
         <Field label={viewMode === "member" ? "Member payout per unit" : "Payout per unit"}><input name="payoutPerUnit" required type="number" min="0" step="0.01" defaultValue={payout?.memberPayoutPerUnit ?? order?.payoutPerUnit ?? ""} className="w-full px-3 py-2 text-sm" /></Field>

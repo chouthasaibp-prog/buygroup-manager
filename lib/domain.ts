@@ -76,12 +76,12 @@ export function calculatePayoutBreakdown(order: PayoutFields): PayoutBreakdown {
 export function calculateFinancials(order: Pick<Order, "retailPrice" | "quantity" | "payoutPerUnit" | "chaseCashbackPercent" | "youngAdultEligible"> & { youngAdultBalanceUsed?: boolean; memberPayoutPerUnit?: number | null; memberTotalPayout?: number | null }): Financials {
   const totalPaid = order.retailPrice * order.quantity;
   const totalPayout = order.memberTotalPayout ?? (order.memberPayoutPerUnit ?? order.payoutPerUnit) * order.quantity;
-  const chaseCashback = totalPaid * (order.chaseCashbackPercent / 100);
-  const youngAdultCashback = order.youngAdultEligible ? totalPaid * 0.05 : 0;
   const youngAdultBalanceApplied = order.youngAdultBalanceUsed ? totalPaid : 0;
+  const chaseCashback = order.youngAdultBalanceUsed ? 0 : totalPaid * (order.chaseCashbackPercent / 100);
+  const youngAdultCashback = order.youngAdultBalanceUsed || !order.youngAdultEligible ? 0 : totalPaid * 0.05;
   const totalCashback = chaseCashback + youngAdultCashback;
-  const amountOwed = totalPaid - chaseCashback;
-  const profit = totalPayout - amountOwed + youngAdultCashback;
+  const amountOwed = order.youngAdultBalanceUsed ? 0 : totalPaid - chaseCashback;
+  const profit = order.youngAdultBalanceUsed ? 0 : totalPayout - amountOwed + youngAdultCashback;
 
   return { totalPaid, totalPayout, chaseCashback, youngAdultCashback, youngAdultBalanceApplied, totalCashback, amountOwed, profit };
 }

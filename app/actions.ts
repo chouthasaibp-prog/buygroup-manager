@@ -28,10 +28,6 @@ const optionalAmazonTrackingNumber = (formData: FormData) => {
   if (!value) return null;
   return value.toUpperCase();
 };
-const payoutModeFromForm = (formData: FormData, fallback: PayoutMode = "PERCENT_SPREAD"): PayoutMode => {
-  const value = String(formData.get("payoutMode") ?? fallback);
-  return value === "MANUAL" ? "MANUAL" : "PERCENT_SPREAD";
-};
 function buildPayoutData({
   formData,
   quantity,
@@ -47,16 +43,11 @@ function buildPayoutData({
 }) {
   const defaultWarehouse = existing?.warehousePayoutPerUnit ?? existing?.payoutPerUnit ?? fallbackPayoutPerUnit;
   const defaultMember = existing?.memberPayoutPerUnit ?? existing?.payoutPerUnit ?? fallbackPayoutPerUnit;
-  const payoutMode = operatorAdmin ? payoutModeFromForm(formData, existing?.payoutMode ?? "PERCENT_SPREAD") : existing?.payoutMode ?? "PERCENT_SPREAD";
   const warehousePayoutPerUnit = operatorAdmin
     ? numberFromForm(formData, "warehousePayoutPerUnit", defaultWarehouse)
     : defaultMember;
-  const spreadPercent = operatorAdmin ? Math.max(0, numberFromForm(formData, "adminSpreadPercent", (existing?.adminSpreadPercent ?? 0.02) * 100)) / 100 : 0;
-  const percentMemberPayout = warehousePayoutPerUnit * (1 - spreadPercent);
   const memberPayoutPerUnit = operatorAdmin
-    ? payoutMode === "MANUAL"
-      ? numberFromForm(formData, "memberPayoutPerUnit", existing?.memberPayoutPerUnit ?? percentMemberPayout)
-      : percentMemberPayout
+    ? numberFromForm(formData, "memberPayoutPerUnit", defaultMember)
     : numberFromForm(formData, "payoutPerUnit", defaultMember);
   const breakdown = calculatePayoutBreakdown({
     quantity,
@@ -75,7 +66,7 @@ function buildPayoutData({
     adminSpreadPerUnit: breakdown.adminSpreadPerUnit,
     adminTotalSpread: breakdown.adminTotalSpread,
     adminSpreadPercent: breakdown.adminSpreadPercent,
-    payoutMode
+    payoutMode: "MANUAL" as PayoutMode
   };
 }
 export type AddTrackingState = {
@@ -783,6 +774,32 @@ export async function deleteOrder(formData: FormData) {
     select: { id: true }
   });
   await prisma.order.delete({ where: { id } });
+  revalidatePath("/");
+}
+
+export async function deleteOrders(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
+  const ids = formData.getAll("orderIds").map(String).filter(Boolean);
+  if (ids.length === 0) return;
+
+  const allowedOrders = await prisma.order.findMany({
+    where: {
+      id: { in: ids },
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    },
+    select: { id: true }
+  });
+  const allowedIds = allowedOrders.map((order) => order.id);
+  if (allowedIds.length === 0) return;
+
+  await prisma.order.deleteMany({
+    where: {
+      id: { in: allowedIds },
+      workspaceId
+    }
+  });
   revalidatePath("/");
 }
 
