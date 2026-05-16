@@ -401,8 +401,11 @@ function reminderLabel(reminder: Reminder) {
   if (reminder.type === "submit_tracking") return reminder.order.trackingNumber ? "Tracking needs warehouse submission" : "Tracking missing";
   if (reminder.type === "check_payout") return "Payout reminder";
   if (reminder.type === "pay_credit_card") return "Payment reminder";
-  if (reminder.type === "confirm_profit") return "Done reminder";
   return reminder.label;
+}
+
+function isDoneReminder(reminder: Reminder) {
+  return reminder.type === "confirm_profit" || reminder.id.endsWith(":profit") || reminder.label.toLowerCase().includes("done reminder");
 }
 
 function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewMode, reminders: Reminder[], trackingChangeAlerts: TrackingChangeAlertItem[], deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]) {
@@ -435,7 +438,7 @@ function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewM
     });
   }
 
-  for (const reminder of reminders.filter((item) => item.order.id === order.id)) {
+  for (const reminder of reminders.filter((item) => item.order.id === order.id && !isDoneReminder(item))) {
     alerts.push({
       id: reminder.id,
       kind: "reminder",
@@ -511,6 +514,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
+  const visibleReminders = reminders.filter((reminder) => !isDoneReminder(reminder));
   const [section, setSection] = useState<string>("dashboard");
   const [stage, setStage] = useState<StageFilter>("ALL");
   const [query, setQuery] = useState("");
@@ -521,7 +525,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<OrderWithRelations | null>(null);
-  const inboxCount = reminders.length + trackingChangeAlerts.length + deliveryBeforeTrackingAlerts.length;
+  const inboxCount = visibleReminders.length + trackingChangeAlerts.length + deliveryBeforeTrackingAlerts.length;
 
   const filteredOrders = useMemo(() => {
     const q = query.toLowerCase();
@@ -632,11 +636,11 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
         </header>
 
         <div className="px-4 py-5 md:px-7">
-          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} viewMode={viewMode} />}
+          {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={visibleReminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} viewMode={viewMode} />}
           {section === "orders" && (
             <OrdersView
               orders={filteredOrders}
-              reminders={reminders}
+              reminders={visibleReminders}
               trackingChangeAlerts={trackingChangeAlerts}
               deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts}
               accounts={accounts}
@@ -709,7 +713,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
                 <X size={16} />
               </button>
             </div>
-            <InboxPanel reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} buyGroups={buyGroups} setSelectedOrder={(order) => {
+            <InboxPanel reminders={visibleReminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} buyGroups={buyGroups} setSelectedOrder={(order) => {
               setSelectedOrder(order);
               setInboxOpen(false);
             }} framed={false} />
@@ -851,6 +855,8 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
 }
 
 function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, buyGroups, setSelectedOrder, framed = true }: { reminders: Reminder[]; trackingChangeAlerts: TrackingChangeAlertItem[]; deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void; framed?: boolean }) {
+  const actionableReminders = reminders.filter((reminder) => !isDoneReminder(reminder));
+
   return (
     <section className={framed ? "rounded-lg border border-slate-500/30 bg-panel/80 p-4 shadow-glow" : "space-y-0"}>
       {framed && (
@@ -886,7 +892,7 @@ function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAle
         <div key={group} className="mb-5 last:mb-0">
           <div className="mb-2 text-xs font-semibold uppercase tracking-[.15em] text-muted">{group === "today" ? "Due Today" : group}</div>
           <div className="space-y-2">
-            {reminders.filter((item) => item.severity === group).slice(0, 8).map((item) => (
+            {actionableReminders.filter((item) => item.severity === group).slice(0, 8).map((item) => (
               <div key={item.id} className={cls("rounded-lg border p-3", reminderTone(item.severity))}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -901,7 +907,7 @@ function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAle
                 <ReminderAction reminder={item} buyGroups={buyGroups} />
               </div>
             ))}
-            {reminders.filter((item) => item.severity === group).length === 0 && <div className="rounded-lg border border-dashed border-line px-3 py-4 text-sm text-muted">Clear</div>}
+            {actionableReminders.filter((item) => item.severity === group).length === 0 && <div className="rounded-lg border border-dashed border-line px-3 py-4 text-sm text-muted">Clear</div>}
           </div>
         </div>
       ))}
@@ -1010,8 +1016,7 @@ function ReminderAction({ reminder, buyGroups }: { reminder: Reminder; buyGroups
   const action =
     reminder.type === "submit_tracking" ? "submitTracking" :
     reminder.type === "check_payout" ? "paidOut" :
-    reminder.type === "pay_credit_card" ? "cardPaid" :
-    reminder.type === "confirm_profit" ? "profitReceived" : "";
+    reminder.type === "pay_credit_card" ? "cardPaid" : "";
 
   if (!action) return null;
   return (

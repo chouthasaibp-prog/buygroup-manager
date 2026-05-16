@@ -186,18 +186,6 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date()): 
       });
     }
 
-    if (order.creditCardPaid && !order.profitReceived) {
-      const dueDate = addDays(order.creditCardPaidAt ?? order.updatedAt, 1);
-      reminders.push({
-        id: `${order.id}:profit`,
-        type: "confirm_profit",
-        label: "Confirm profit",
-        dueDate,
-        order,
-        severity: severityFor(dueDate),
-        action: "Mark profit received"
-      });
-    }
   }
 
   return reminders.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
