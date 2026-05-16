@@ -35,21 +35,23 @@ export type Financials = {
   totalPayout: number;
   chaseCashback: number;
   youngAdultCashback: number;
+  youngAdultBalanceApplied: number;
   totalCashback: number;
   amountOwed: number;
   profit: number;
 };
 
-export function calculateFinancials(order: Pick<Order, "retailPrice" | "quantity" | "payoutPerUnit" | "chaseCashbackPercent" | "youngAdultEligible">): Financials {
+export function calculateFinancials(order: Pick<Order, "retailPrice" | "quantity" | "payoutPerUnit" | "chaseCashbackPercent" | "youngAdultEligible"> & { youngAdultBalanceUsed?: boolean }): Financials {
   const totalPaid = order.retailPrice * order.quantity;
   const totalPayout = order.payoutPerUnit * order.quantity;
   const chaseCashback = totalPaid * (order.chaseCashbackPercent / 100);
   const youngAdultCashback = order.youngAdultEligible ? totalPaid * 0.05 : 0;
+  const youngAdultBalanceApplied = order.youngAdultBalanceUsed ? totalPaid : 0;
   const totalCashback = chaseCashback + youngAdultCashback;
   const amountOwed = totalPaid - chaseCashback;
   const profit = totalPayout - amountOwed + youngAdultCashback;
 
-  return { totalPaid, totalPayout, chaseCashback, youngAdultCashback, totalCashback, amountOwed, profit };
+  return { totalPaid, totalPayout, chaseCashback, youngAdultCashback, youngAdultBalanceApplied, totalCashback, amountOwed, profit };
 }
 
 type StageFields = Pick<Order,

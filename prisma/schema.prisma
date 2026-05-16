@@ -152,6 +152,7 @@ model Order {
   payoutPerUnit                      Float
   chaseCashbackPercent               Float          @default(0)
   youngAdultEligible                 Boolean        @default(false)
+  youngAdultBalanceUsed              Boolean        @default(false)
   sameTracking                       Boolean        @default(false)
   shippingType                       String?
   orderNumber                        String?

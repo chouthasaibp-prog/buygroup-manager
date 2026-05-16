@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS "Order" (
   "payoutPerUnit" REAL NOT NULL,
   "chaseCashbackPercent" REAL NOT NULL DEFAULT 0,
   "youngAdultEligible" BOOLEAN NOT NULL DEFAULT false,
+  "youngAdultBalanceUsed" BOOLEAN NOT NULL DEFAULT false,
   "sameTracking" BOOLEAN NOT NULL DEFAULT false,
   "shippingType" TEXT,
   "orderNumber" TEXT,

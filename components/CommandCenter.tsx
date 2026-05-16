@@ -199,6 +199,15 @@ function metricTone(label: string) {
   return "border-line bg-panel/80";
 }
 
+function YoungAdultBalanceBadge({ order }: { order: OrderWithRelations }) {
+  if (!order.youngAdultBalanceUsed) return null;
+  return (
+    <span className="inline-flex items-center rounded-md border border-fuchsia-300/35 bg-fuchsia-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-[.12em] text-fuchsia-100">
+      YA Balance Used
+    </span>
+  );
+}
+
 function reminderTone(severity: Reminder["severity"]) {
   if (severity === "overdue") return "border-white/30 bg-white/10";
   if (severity === "today") return "border-blue-300/40 bg-blue-500/10";
@@ -1264,12 +1273,13 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
   };
 
   return (
-    <article className={cls("rounded-lg border bg-panel/80 p-4 shadow-glow transition hover:-translate-y-0.5 hover:shadow-neon", stageTone[order.currentStage])}>
+    <article className={cls("rounded-lg border bg-panel/80 p-4 shadow-glow transition hover:-translate-y-0.5 hover:shadow-neon", stageTone[order.currentStage], order.youngAdultBalanceUsed && "ring-1 ring-fuchsia-300/25")}>
       <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between">
         <button onClick={onOpen} className="min-w-0 text-left xl:flex-1">
           <div className="flex items-center gap-2">
             <h3 className="truncate font-semibold">{order.itemName}</h3>
             <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{viewMode === "personal" ? personalWorkflowLabel(order) : memberSafe ? memberWorkflowLabel(order) : adminWorkflowLabel(order)}</span>
+            <YoungAdultBalanceBadge order={order} />
           </div>
           {viewMode === "admin" && order.submittedBy && <div className="mt-1 text-xs text-muted">Submitted by <span className="text-white">{memberName(order)}</span> · {order.submittedBy.email}</div>}
           <div className="mt-3 flex flex-wrap gap-2">
@@ -1532,6 +1542,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
         <aside className="space-y-4">
           <div className="rounded-lg border border-line bg-surface/60 p-4">
             <div className="mb-3 text-sm font-semibold">{viewMode === "personal" ? "Workflow" : "Submission"}</div>
+            <YoungAdultBalanceBadge order={order} />
             {viewMode !== "personal" && <Fact label="Submitted by" value={memberName(order)} />}
             {viewMode !== "personal" && <Fact label="Member email" value={order.submittedBy?.email ?? "Unknown"} />}
             <Fact label="Workspace" value={workspaceName} />
@@ -1566,6 +1577,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Total Payout", money(financials.totalPayout)],
               ["Chase Cashback", money(financials.chaseCashback)],
               ["Young Adult Cashback", money(financials.youngAdultCashback)],
+              ["YA Balance Used", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Amount Owed", money(financials.amountOwed)],
               ["Estimated Profit", money(financials.profit)],
               ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
@@ -1574,6 +1586,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Total Payout", money(financials.totalPayout)],
               ["Chase Cashback", money(financials.chaseCashback)],
               ["Young Adult Cashback", money(financials.youngAdultCashback)],
+              ["YA Balance Used", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Total Cashback", money(financials.totalCashback)],
               ["Credit / Amount Owed", money(financials.amountOwed)],
               ["Estimated Profit", money(financials.profit)],
@@ -1639,8 +1652,9 @@ function OrderFields({ accounts, buyGroups, order, lockTracking = false }: { acc
       </Field>
       <Field label="Custom Chase %"><input name="customChaseCashbackPercent" type="number" min="0" step="0.01" placeholder="Only if custom" className="w-full px-3 py-2 text-sm" /></Field>
       <Field label="Shipping type"><input name="shippingType" defaultValue={order?.shippingType ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
-      <div className="grid gap-3 md:col-span-2 md:grid-cols-2">
-        <CheckField name="youngAdultEligible" label="Young Adult extra 5%" defaultChecked={order?.youngAdultEligible ?? false} />
+      <div className="grid gap-3 md:col-span-2 md:grid-cols-3">
+        <CheckField name="youngAdultEligible" label="Young Adult extra 5% cashback" defaultChecked={order?.youngAdultEligible ?? false} />
+        <CheckField name="youngAdultBalanceUsed" label="Used Young Adult balance to pay" defaultChecked={order?.youngAdultBalanceUsed ?? false} />
         <CheckField name="sameTracking" label="Same tracking" defaultChecked={order?.sameTracking ?? false} />
       </div>
       <Field label="Notes" wide><textarea name="notes" defaultValue={order?.notes ?? ""} rows={3} className="w-full resize-none px-3 py-2 text-sm" /></Field>
@@ -1681,7 +1695,10 @@ function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations
         {rows.slice(0, 12).map(({ order, financials }) => (
           <div key={order.id} className="grid gap-2 rounded-lg border border-line bg-surface/60 p-3 text-sm lg:grid-cols-[1.4fr_1fr_repeat(4,minmax(120px,.6fr))] lg:items-center">
             <div className="min-w-0">
-              <div className="truncate font-medium text-white">{order.itemName}</div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="truncate font-medium text-white">{order.itemName}</span>
+                <YoungAdultBalanceBadge order={order} />
+              </div>
               {viewMode === "admin" && <div className="mt-0.5 truncate text-xs text-muted">{memberName(order)}</div>}
             </div>
             <div className="text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
@@ -1913,7 +1930,10 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
               return (
                 <div key={order.id} className="grid gap-3 rounded-lg border border-line bg-surface/60 px-3 py-3 text-sm lg:grid-cols-[1.4fr_repeat(4,minmax(120px,.65fr))_auto] lg:items-center">
                   <div className="min-w-0">
-                    <div className="truncate font-medium text-white">{order.itemName}</div>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="truncate font-medium text-white">{order.itemName}</span>
+                      <YoungAdultBalanceBadge order={order} />
+                    </div>
                     <div className="mt-0.5 truncate text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
                   </div>
                   <Fact label="Total paid" value={money(financials.totalPaid)} />
@@ -1982,7 +2002,7 @@ function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
             <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
             <input type="hidden" name="id" value={order.id} />
             <input type="hidden" name="action" value="memberConfirmPayment" />
-            <span className="text-sm">{order.itemName}</span>
+            <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm"><span className="truncate">{order.itemName}</span><YoungAdultBalanceBadge order={order} /></span>
             <span className="text-sm text-muted">{money(order.memberPayoutAmount ?? calculateFinancials(order).amountOwed)}</span>
             <button className="rounded-md border border-blue-300/40 px-2.5 py-1.5 text-xs text-blue-100">Confirm Payment</button>
           </form>
@@ -1992,7 +2012,7 @@ function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
             <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
             <input type="hidden" name="id" value={order.id} />
             <input type="hidden" name="action" value="memberDone" />
-            <span className="text-sm">{order.itemName}</span>
+            <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm"><span className="truncate">{order.itemName}</span><YoungAdultBalanceBadge order={order} /></span>
             <span className="text-xs text-green-100">Payment confirmed / credit owed</span>
             <button className="rounded-md border border-green-300/40 px-2.5 py-1.5 text-xs text-green-100">Mark Done</button>
           </form>
@@ -2108,10 +2128,10 @@ function AnalyticsView({ orders }: { orders: OrderWithRelations[] }) {
 
 function ImportExportView({ orders }: { orders: OrderWithRelations[] }) {
   const csv = useMemo(() => {
-    const header = ["item", "quantity", "account", "buy_group_destination", "order_number", "tracking", "stage", "total_paid", "total_payout", "amount_owed", "estimated_profit", "profit_status"];
+    const header = ["item", "quantity", "account", "buy_group_destination", "order_number", "tracking", "stage", "total_paid", "total_payout", "young_adult_cashback", "young_adult_balance_used", "amount_owed", "estimated_profit", "profit_status"];
     const rows = orders.map((order) => {
       const financials = calculateFinancials(order);
-      return [order.itemName, order.quantity, order.amazonAccount?.name ?? "", order.buyGroup?.name ?? order.warehouse?.name ?? "", order.orderNumber ?? "", order.trackingNumber ?? "", order.currentStage, financials.totalPaid, financials.totalPayout, financials.amountOwed, financials.profit, order.creditCardPaid ? "realized" : "unrealized"];
+      return [order.itemName, order.quantity, order.amazonAccount?.name ?? "", order.buyGroup?.name ?? order.warehouse?.name ?? "", order.orderNumber ?? "", order.trackingNumber ?? "", order.currentStage, financials.totalPaid, financials.totalPayout, financials.youngAdultCashback, financials.youngAdultBalanceApplied, financials.amountOwed, financials.profit, order.creditCardPaid ? "realized" : "unrealized"];
     });
     return [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
   }, [orders]);
