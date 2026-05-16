@@ -483,6 +483,28 @@ export async function reviewTrackingChangeAlert(formData: FormData) {
   revalidatePath("/");
 }
 
+export async function snoozeTrackingChangeAlert(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  if (context.activeWorkspace.type !== "OPERATOR" || !context.isAdmin) {
+    throw new Error("Only workspace admins can snooze tracking alerts.");
+  }
+
+  const id = String(formData.get("alertId") ?? "");
+  const hours = numberFromForm(formData, "hours", 24);
+  const snoozedUntil = new Date();
+  snoozedUntil.setHours(snoozedUntil.getHours() + hours);
+  await prisma.trackingChangeAlert.updateMany({
+    where: {
+      id,
+      workspaceId: context.activeWorkspace.id,
+      reviewedAt: null
+    },
+    data: { snoozedUntil }
+  });
+
+  revalidatePath("/");
+}
+
 export async function markWarehouseTrackingUpdated(formData: FormData) {
   const context = await requireWorkspaceActionContext(formData);
   if (context.activeWorkspace.type !== "OPERATOR" || !context.isAdmin) {
@@ -690,7 +712,7 @@ export async function snoozeDeliveryBeforeTrackingAlert(formData: FormData) {
   }
 
   const id = String(formData.get("alertId") ?? "");
-  const minutes = numberFromForm(formData, "minutes", 60);
+  const minutes = numberFromForm(formData, "minutes", 1440);
   const snoozedUntil = new Date();
   snoozedUntil.setMinutes(snoozedUntil.getMinutes() + minutes);
   await prisma.deliveryBeforeTrackingAlert.updateMany({
@@ -700,6 +722,84 @@ export async function snoozeDeliveryBeforeTrackingAlert(formData: FormData) {
       reviewedAt: null
     },
     data: { snoozedUntil }
+  });
+
+  revalidatePath("/");
+}
+
+export async function reviewReminder(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
+  const orderId = String(formData.get("orderId") ?? "");
+  const type = String(formData.get("type") ?? "");
+  if (!orderId || !type) return;
+
+  await prisma.order.findFirstOrThrow({
+    where: {
+      id: orderId,
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    },
+    select: { id: true }
+  });
+  await prisma.reminderState.upsert({
+    where: { orderId_type: { orderId, type } },
+    update: { reviewedAt: new Date(), snoozedUntil: null },
+    create: { workspaceId, orderId, type, reviewedAt: new Date() }
+  });
+
+  revalidatePath("/");
+}
+
+export async function snoozeReminder(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
+  const orderId = String(formData.get("orderId") ?? "");
+  const type = String(formData.get("type") ?? "");
+  if (!orderId || !type) return;
+
+  await prisma.order.findFirstOrThrow({
+    where: {
+      id: orderId,
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    },
+    select: { id: true }
+  });
+  const snoozedUntil = new Date();
+  snoozedUntil.setHours(snoozedUntil.getHours() + numberFromForm(formData, "hours", 24));
+  await prisma.reminderState.upsert({
+    where: { orderId_type: { orderId, type } },
+    update: { reviewedAt: null, snoozedUntil },
+    create: { workspaceId, orderId, type, snoozedUntil }
+  });
+
+  revalidatePath("/");
+}
+
+export async function requestMissingOrderInfo(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  if (context.activeWorkspace.type !== "OPERATOR" || !context.isAdmin) {
+    throw new Error("Only workspace admins can request missing order info.");
+  }
+
+  const workspaceId = context.activeWorkspace.id;
+  const orderId = String(formData.get("orderId") ?? "");
+  const type = String(formData.get("type") ?? "");
+  if (!orderId || !["missing_amazon_account", "missing_buy_group"].includes(type)) return;
+
+  const order = await prisma.order.findFirstOrThrow({
+    where: { id: orderId, workspaceId },
+    select: { id: true, amazonAccountId: true, buyGroupId: true, warehouseId: true }
+  });
+
+  if (type === "missing_amazon_account" && order.amazonAccountId) return;
+  if (type === "missing_buy_group" && (order.buyGroupId || order.warehouseId)) return;
+
+  await prisma.reminderState.upsert({
+    where: { orderId_type: { orderId, type } },
+    update: { reviewedAt: null, snoozedUntil: null },
+    create: { workspaceId, orderId, type }
   });
 
   revalidatePath("/");

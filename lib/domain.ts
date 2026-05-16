@@ -1,4 +1,4 @@
-import type { Order, OrderStage } from "@prisma/client";
+import type { Order, OrderStage, ReminderState } from "@prisma/client";
 
 export const stages: Array<{ key: OrderStage | "ALL"; label: string; short: string }> = [
   { key: "ALL", label: "All", short: "All" },
@@ -28,6 +28,7 @@ export type OrderWithRelations = Order & {
   buyGroup: { id: string; name: string } | null;
   warehouse: { id: string; name: string; code: string } | null;
   submittedBy?: { id: string; name: string | null; firstName: string | null; lastName: string | null; email: string } | null;
+  reminderStates?: ReminderState[];
 };
 
 export type Financials = {
@@ -80,8 +81,8 @@ export function calculateFinancials(order: Pick<Order, "retailPrice" | "quantity
   const chaseCashback = order.youngAdultBalanceUsed ? 0 : totalPaid * (order.chaseCashbackPercent / 100);
   const youngAdultCashback = order.youngAdultBalanceUsed || !order.youngAdultEligible ? 0 : totalPaid * 0.05;
   const totalCashback = chaseCashback + youngAdultCashback;
-  const amountOwed = order.youngAdultBalanceUsed ? 0 : totalPaid - chaseCashback;
-  const profit = order.youngAdultBalanceUsed ? 0 : totalPayout - amountOwed + youngAdultCashback;
+  const amountOwed = order.youngAdultBalanceUsed ? 0 : Math.max(0, totalPaid - chaseCashback - youngAdultCashback);
+  const profit = order.youngAdultBalanceUsed ? 0 : totalPayout - amountOwed;
 
   return { totalPaid, totalPayout, chaseCashback, youngAdultCashback, youngAdultBalanceApplied, totalCashback, amountOwed, profit };
 }
@@ -130,14 +131,20 @@ export function dateTime(date: Date | string | null | undefined) {
 
 export type Reminder = {
   id: string;
-  type: "submit_tracking" | "check_payout" | "pay_credit_card" | "confirm_profit" | "missing_info";
+  type: "submit_tracking" | "check_payout" | "pay_credit_card" | "confirm_profit" | "missing_info" | "missing_amazon_account" | "missing_buy_group";
   label: string;
   dueDate: Date;
   order: OrderWithRelations;
   severity: "overdue" | "today" | "upcoming";
+  priority?: "high" | "warning" | "normal";
   action: string;
   notes?: string;
 };
+
+function reminderHidden(order: OrderWithRelations, type: Reminder["type"], now: Date) {
+  const state = order.reminderStates?.find((item) => item.type === type);
+  return !!state?.reviewedAt || !!(state?.snoozedUntil && state.snoozedUntil > now);
+}
 
 const addDays = (date: Date, days: number) => {
   const next = new Date(date);
@@ -145,7 +152,7 @@ const addDays = (date: Date, days: number) => {
   return next;
 };
 
-export function buildReminders(orders: OrderWithRelations[], now = new Date()): Reminder[] {
+export function buildReminders(orders: OrderWithRelations[], now = new Date(), viewMode: "personal" | "member" | "admin" = "personal"): Reminder[] {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const endOfToday = addDays(startOfToday, 1);
 
@@ -158,13 +165,74 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date()): 
   const reminders: Reminder[] = [];
 
   for (const order of orders) {
-    const missing = [
+    const missingAccountRequested = !!order.reminderStates?.find((item) => item.type === "missing_amazon_account");
+    const missingBuyGroupRequested = !!order.reminderStates?.find((item) => item.type === "missing_buy_group");
+
+    if (!order.amazonAccount && viewMode === "admin" && !reminderHidden(order, "missing_amazon_account", now)) {
+      reminders.push({
+        id: `${order.id}:missing-account`,
+        type: "missing_amazon_account",
+        label: "Amazon account missing",
+        dueDate: order.createdAt,
+        order,
+        severity: severityFor(order.createdAt),
+        priority: "warning",
+        action: "Request account from member",
+        notes: "Amazon account missing"
+      });
+    }
+
+    if (!order.amazonAccount && viewMode === "member" && missingAccountRequested && !reminderHidden(order, "missing_amazon_account", now)) {
+      reminders.push({
+        id: `${order.id}:missing-account`,
+        type: "missing_amazon_account",
+        label: "Amazon account missing",
+        dueDate: order.createdAt,
+        order,
+        severity: severityFor(order.createdAt),
+        priority: "warning",
+        action: "Update Amazon account",
+        notes: "Please update the Amazon account used for this order."
+      });
+    }
+
+    if (!order.buyGroup && !order.warehouse && viewMode === "admin" && !reminderHidden(order, "missing_buy_group", now)) {
+      reminders.push({
+        id: `${order.id}:missing-buy-group`,
+        type: "missing_buy_group",
+        label: "Buy group / destination missing",
+        dueDate: order.createdAt,
+        order,
+        severity: severityFor(order.createdAt),
+        priority: "high",
+        action: "Request buy group from member",
+        notes: "Buy group / destination missing"
+      });
+    }
+
+    if (!order.buyGroup && !order.warehouse && viewMode === "member" && missingBuyGroupRequested && !reminderHidden(order, "missing_buy_group", now)) {
+      reminders.push({
+        id: `${order.id}:missing-buy-group`,
+        type: "missing_buy_group",
+        label: "Buy group / destination missing",
+        dueDate: order.createdAt,
+        order,
+        severity: severityFor(order.createdAt),
+        priority: "high",
+        action: "Update buy group / destination",
+        notes: "Please update the buy group / destination for this order."
+      });
+    }
+
+    const missing = viewMode === "personal" ? [
       !order.orderNumber && "order number",
       !order.amazonAccount && "Amazon account",
       !order.buyGroup && !order.warehouse && "buy group"
+    ].filter(Boolean) : [
+      !order.orderNumber && "order number"
     ].filter(Boolean);
 
-    if (missing.length > 0) {
+    if (missing.length > 0 && !reminderHidden(order, "missing_info", now)) {
       const dueDate = order.createdAt;
       reminders.push({
         id: `${order.id}:missing`,
@@ -178,7 +246,7 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date()): 
       });
     }
 
-    if (!(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)) {
+    if (!(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) && !reminderHidden(order, "submit_tracking", now)) {
       const dueDate = order.trackingNumber ? order.trackingAddedAt ?? now : addDays(order.createdAt, 1);
       reminders.push({
         id: `${order.id}:tracking`,
@@ -191,7 +259,7 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date()): 
       });
     }
 
-    if ((order.memberMarkedDelivered || order.delivered) && (order.adminMarkedScannedByWarehouse || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut)) {
+    if ((order.memberMarkedDelivered || order.delivered) && (order.adminMarkedScannedByWarehouse || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut) && !reminderHidden(order, "check_payout", now)) {
       const baseDueDate = addDays(order.memberMarkedDeliveredAt ?? order.deliveredAt ?? order.updatedAt, 2);
       const dueDate = order.payoutReminderSnoozedAt && order.payoutReminderSnoozedAt > baseDueDate ? order.payoutReminderSnoozedAt : baseDueDate;
       reminders.push({
@@ -205,7 +273,7 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date()): 
       });
     }
 
-    if ((order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid)) {
+    if ((order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid) && !reminderHidden(order, "pay_credit_card", now)) {
       const dueDate =
         order.manualCreditCardDueDate ??
         addDays(order.adminReceivedPayoutFromWarehouseAt ?? order.paidOutAt ?? order.updatedAt, order.amazonAccount?.defaultCreditCardDueDays ?? 7);

@@ -68,6 +68,19 @@ CREATE TABLE IF NOT EXISTS "Order" (
   CONSTRAINT "Order_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS "ReminderState" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "workspaceId" TEXT NOT NULL,
+  "orderId" TEXT NOT NULL,
+  "type" TEXT NOT NULL,
+  "reviewedAt" DATETIME,
+  "snoozedUntil" DATETIME,
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "ReminderState_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT "ReminderState_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS "Order_currentStage_idx" ON "Order"("currentStage");
 CREATE INDEX IF NOT EXISTS "Order_amazonAccountId_idx" ON "Order"("amazonAccountId");
 CREATE INDEX IF NOT EXISTS "Order_buyGroupId_idx" ON "Order"("buyGroupId");

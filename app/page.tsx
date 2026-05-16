@@ -19,7 +19,7 @@ export default async function Home({ searchParams }: Props) {
     prisma.order.findMany({
       where: orderWhere,
       orderBy: [{ updatedAt: "desc" }],
-      include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true }
+      include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true }
     }),
     prisma.amazonAccount.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
     prisma.buyGroup.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
@@ -35,11 +35,15 @@ export default async function Home({ searchParams }: Props) {
       ? prisma.trackingChangeAlert.findMany({
           where: {
             workspaceId: context.activeWorkspace.id,
-            reviewedAt: null
+            reviewedAt: null,
+            OR: [
+              { snoozedUntil: null },
+              { snoozedUntil: { lte: new Date() } }
+            ]
           },
           orderBy: { changedAt: "desc" },
           include: {
-            order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true } },
+            order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true } },
             member: true
           }
         }).catch(() => [])
@@ -56,7 +60,7 @@ export default async function Home({ searchParams }: Props) {
           },
           orderBy: { deliveredAt: "asc" },
           include: {
-            order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true } },
+            order: { include: { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true } },
             member: true
           }
         }).catch(() => [])
@@ -118,25 +122,66 @@ export default async function Home({ searchParams }: Props) {
             : "ORDERED") as OrderStage
     };
   });
-  const reminders = buildReminders(visibleOrders);
-  const openOrders = visibleOrders.filter((order) => !order.profitReceived);
+  const viewMode = context.activeWorkspace.type === "PERSONAL" ? "personal" : context.isAdmin ? "admin" : "member";
+  const reminders = buildReminders(visibleOrders, new Date(), viewMode);
+  const openOrders = visibleOrders.filter((order) => viewMode === "admin"
+    ? !(order.adminPaidMember || order.memberPaid || order.profitReceived)
+    : viewMode === "member"
+      ? !(order.memberMarkedDone || order.profitReceived)
+      : !order.profitReceived);
   const totals = visibleOrders.reduce(
     (acc, order) => {
       const financials = calculateFinancials(order);
       const payout = calculatePayoutBreakdown(order);
+
+      if (viewMode === "admin") {
+        const adminDone = order.adminPaidMember || order.memberPaid || order.profitReceived;
+        const warehousePaid = order.adminReceivedPayoutFromWarehouse || order.paidOut;
+        const memberPaid = order.adminPaidMember || order.memberPaid;
+
+        acc.totalSpent += financials.totalPaid;
+        acc.totalPayout += payout.warehouseTotalPayout;
+        if (!warehousePaid) acc.warehousePayoutExpected += payout.warehouseTotalPayout;
+        if (!memberPaid) {
+          acc.memberPayoutOwed += order.memberPayoutAmount ?? payout.memberTotalPayout;
+          acc.amountOwed += order.memberPayoutAmount ?? payout.memberTotalPayout;
+        }
+        if (warehousePaid && memberPaid) {
+          acc.adminSpreadRealized += payout.adminTotalSpread;
+          acc.realizedProfit += payout.adminTotalSpread;
+        } else if (!adminDone) {
+          acc.adminSpreadUnrealized += payout.adminTotalSpread;
+          acc.unrealizedProfit += payout.adminTotalSpread;
+        }
+        return acc;
+      }
+
+      if (viewMode === "member") {
+        const memberDone = order.memberMarkedDone || order.profitReceived;
+        const memberPaid = order.adminPaidMember || order.memberPaid;
+        const paymentConfirmed = order.memberConfirmedPayment || memberDone;
+
+        acc.totalSpent += financials.totalPaid;
+        acc.totalPayout += payout.memberTotalPayout;
+        acc.totalCashback += financials.totalCashback;
+        if (!memberPaid) {
+          acc.expectedMemberPayout += order.memberPayoutAmount ?? payout.memberTotalPayout;
+          acc.amountOwed += order.memberPayoutAmount ?? payout.memberTotalPayout;
+        }
+        if (order.memberConfirmedPayment && !memberDone) acc.memberPayoutOwed += financials.amountOwed;
+        if (paymentConfirmed) acc.realizedProfit += financials.profit;
+        else if (!memberDone) acc.unrealizedProfit += financials.profit;
+        return acc;
+      }
+
       if (!order.profitReceived) {
         acc.totalSpent += financials.totalPaid;
-        acc.totalPayout += context.isAdmin && context.activeWorkspace.type === "OPERATOR" ? payout.warehouseTotalPayout : financials.totalPayout;
-        acc.warehousePayoutExpected += context.isAdmin && context.activeWorkspace.type === "OPERATOR" ? payout.warehouseTotalPayout : financials.totalPayout;
+        acc.totalPayout += financials.totalPayout;
+        acc.warehousePayoutExpected += financials.totalPayout;
         acc.memberPayoutOwed += payout.memberTotalPayout;
         acc.expectedMemberPayout += payout.memberTotalPayout;
         acc.totalCashback += financials.totalCashback;
         acc.amountOwed += financials.amountOwed;
-      }
-
-      if (context.isAdmin && context.activeWorkspace.type === "OPERATOR") {
-        if (order.adminPaidMember || order.memberPaid || order.profitReceived) acc.adminSpreadRealized += payout.adminTotalSpread;
-        else acc.adminSpreadUnrealized += payout.adminTotalSpread;
       }
 
       if (order.creditCardPaid) {

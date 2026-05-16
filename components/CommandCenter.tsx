@@ -2,8 +2,8 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, DeliveryBeforeTrackingAlert, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
-import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, reviewDeliveryBeforeTrackingAlert, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
+import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, MoreHorizontal, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
+import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, requestMissingOrderInfo, reviewDeliveryBeforeTrackingAlert, reviewReminder, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, snoozeReminder, snoozeTrackingChangeAlert, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, calculatePayoutBreakdown, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
@@ -57,11 +57,12 @@ type DeliveryBeforeTrackingAlertItem = DeliveryBeforeTrackingAlert & {
 type OrderCardAlert = {
   id: string;
   kind: "urgent_delivery" | "tracking_change" | "reminder";
-  priority: "high" | "normal";
+  priority: "high" | "warning" | "normal";
   label: string;
   detail?: string;
   action?: "submitToWarehouse" | "open";
   reviewAction?: "reviewDeliveryBeforeTracking" | "reviewTrackingChange";
+  reminderType?: Reminder["type"];
 };
 
 type WorkspaceSwitcherItem = {
@@ -90,6 +91,14 @@ type WorkflowDateStep = {
   label: string;
   completed: boolean;
   date: Date | string | null | undefined;
+};
+type CalculationBreakdown = {
+  subtitle?: string;
+  lines: Array<{ label: string; value: string; muted?: boolean }>;
+  formula?: string;
+  finalLabel: string;
+  finalValue: string;
+  note?: string;
 };
 
 const adminStages: Array<{ key: StageFilter; label: string; short: string }> = [
@@ -215,10 +224,270 @@ function YoungAdultBalanceBadge({ order }: { order: OrderWithRelations }) {
   );
 }
 
+function isMoneyBreakdownLabel(label: string) {
+  const normalized = label.toLowerCase();
+  return normalized.includes("credit")
+    || normalized.includes("owed")
+    || normalized.includes("payout")
+    || normalized.includes("spread")
+    || normalized.includes("profit")
+    || normalized.includes("cashback")
+    || normalized.includes("total paid")
+    || normalized.includes("total spent");
+}
+
+function isOrderDoneForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "admin") return isAdminDone(order);
+  if (viewMode === "personal") return isPersonalDone(order);
+  return isMemberDone(order);
+}
+
+function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewMode: WorkflowViewMode, value?: number): CalculationBreakdown {
+  const financials = calculateFinancials(order);
+  const payout = calculatePayoutBreakdown(order);
+  const paidToMember = order.adminPaidMember || order.memberPaid;
+  const normalized = label.toLowerCase();
+  const memberPayout = order.memberPayoutAmount ?? payout.memberTotalPayout;
+  const note = order.youngAdultBalanceUsed ? "Paid with YA Balance: no new cashback/profit/credit owed counted." : undefined;
+
+  if (viewMode === "admin" && (normalized.includes("spread") || normalized.includes("warehouse") || normalized.includes("member payout") || normalized.includes("owed to member") || normalized.includes("payout owed"))) {
+    return {
+      subtitle: order.itemName,
+      lines: [
+        { label: "Warehouse payout per unit", value: money(payout.warehousePayoutPerUnit) },
+        { label: "Member payout per unit", value: money(payout.memberPayoutPerUnit) },
+        { label: "Quantity", value: String(order.quantity) },
+        { label: "Warehouse total payout", value: `${money(payout.warehousePayoutPerUnit)} x ${order.quantity} = ${money(payout.warehouseTotalPayout)}` },
+        { label: "Member total payout", value: `${money(payout.memberPayoutPerUnit)} x ${order.quantity} = ${money(memberPayout)}` },
+        { label: "Admin spread per unit", value: `${money(payout.warehousePayoutPerUnit)} - ${money(payout.memberPayoutPerUnit)} = ${money(payout.adminSpreadPerUnit)}` },
+        { label: "Admin total spread", value: `${money(payout.warehouseTotalPayout)} - ${money(memberPayout)} = ${money(payout.warehouseTotalPayout - memberPayout)}` },
+        { label: "Paid to member status", value: paidToMember ? "Paid" : "Open" }
+      ],
+      formula: normalized.includes("spread") ? "Admin total spread = warehouse total payout - member total payout" : "Member payout owed = member payout per unit x quantity",
+      finalLabel: normalized.includes("spread") ? "Final admin spread" : "Final member payout",
+      finalValue: money(value ?? (normalized.includes("spread") ? payout.warehouseTotalPayout - memberPayout : memberPayout))
+    };
+  }
+
+  if (normalized.includes("payout") || normalized.includes("owed to me")) {
+    return {
+      subtitle: order.itemName,
+      lines: [
+        { label: viewMode === "member" ? "Member payout per unit" : "Payout per unit", value: money(viewMode === "member" ? payout.memberPayoutPerUnit : order.payoutPerUnit) },
+        { label: "Quantity", value: String(order.quantity) },
+        { label: viewMode === "member" ? "Member total payout" : "Total payout", value: `${money(viewMode === "member" ? payout.memberPayoutPerUnit : order.payoutPerUnit)} x ${order.quantity} = ${money(viewMode === "member" ? memberPayout : financials.totalPayout)}` },
+        ...(viewMode === "member" ? [{ label: "Paid by admin status", value: paidToMember ? "Paid" : "Open" }] : [])
+      ],
+      formula: viewMode === "member" ? "Member payout = member payout per unit x quantity" : "Payout = payout per unit x quantity",
+      finalLabel: viewMode === "member" ? "Final member payout" : "Final payout",
+      finalValue: money(value ?? (viewMode === "member" ? memberPayout : financials.totalPayout)),
+      note
+    };
+  }
+
+  if (normalized.includes("profit")) {
+    return {
+      subtitle: order.itemName,
+      lines: [
+        { label: "Retail per unit", value: money(order.retailPrice) },
+        { label: "Quantity", value: String(order.quantity) },
+        { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
+        { label: viewMode === "admin" ? "Member payout" : "Payout", value: money(financials.totalPayout) },
+        { label: "Cashback", value: money(financials.chaseCashback) },
+        { label: "Young Adult cashback", value: money(financials.youngAdultCashback) },
+        { label: "Credit owed", value: money(financials.amountOwed) },
+        { label: "Profit status", value: order.creditCardPaid || order.memberConfirmedPayment || order.profitReceived ? "Realized" : "Unrealized" }
+      ],
+      formula: "Profit = payout - credit owed",
+      finalLabel: "Final profit",
+      finalValue: money(value ?? financials.profit),
+      note
+    };
+  }
+
+  if (normalized.includes("cashback")) {
+    return {
+      subtitle: order.itemName,
+      lines: [
+        { label: "Retail per unit", value: money(order.retailPrice) },
+        { label: "Quantity", value: String(order.quantity) },
+        { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
+        { label: "Cashback rate", value: order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%` },
+        { label: "Cashback", value: money(financials.chaseCashback) },
+        { label: "Young Adult cashback", value: money(financials.youngAdultCashback) }
+      ],
+      formula: "Total cashback = cashback + Young Adult cashback",
+      finalLabel: "Final cashback",
+      finalValue: money(value ?? financials.totalCashback),
+      note
+    };
+  }
+
+  if (normalized.includes("total paid") || normalized.includes("total spent")) {
+    return {
+      subtitle: order.itemName,
+      lines: [
+        { label: "Retail per unit", value: money(order.retailPrice) },
+        { label: "Quantity", value: String(order.quantity) }
+      ],
+      formula: "Total paid = retail per unit x quantity",
+      finalLabel: "Final total paid",
+      finalValue: money(value ?? financials.totalPaid),
+      note
+    };
+  }
+
+  return {
+    subtitle: order.itemName,
+    lines: [
+      { label: "Retail per unit", value: money(order.retailPrice) },
+      { label: "Quantity", value: String(order.quantity) },
+      { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
+      { label: "Cashback", value: money(financials.chaseCashback) },
+      { label: "Young Adult cashback", value: money(financials.youngAdultCashback) },
+      ...(order.youngAdultBalanceUsed ? [{ label: "Used YA balance adjustment", value: `-${money(financials.youngAdultBalanceApplied)}` }] : []),
+      ...(viewMode === "member" ? [{ label: "Amount paid by admin / member payout", value: money(memberPayout) }] : [])
+    ],
+    formula: order.youngAdultBalanceUsed ? "Credit owed = 0 because payment used previously earned YA balance" : "Credit owed = total paid - cashback - Young Adult cashback",
+    finalLabel: "Final credit owed",
+    finalValue: money(value ?? financials.amountOwed),
+    note
+  };
+}
+
+function aggregateBreakdown(label: string, orders: OrderWithRelations[], viewMode: WorkflowViewMode, finalValue: string): CalculationBreakdown {
+  const normalized = label.toLowerCase();
+  const financialRows = orders.map((order) => ({ order, financials: calculateFinancials(order), payout: calculatePayoutBreakdown(order) }));
+  const openRows = financialRows.filter(({ order }) => !isOrderDoneForView(order, viewMode));
+  const memberUnpaidRows = financialRows.filter(({ order }) => !(order.adminPaidMember || order.memberPaid));
+  const realizedRows = financialRows.filter(({ order }) => viewMode === "member" ? order.memberConfirmedPayment || isMemberDone(order) : order.creditCardPaid);
+  const unrealizedRows = financialRows.filter(({ order }) => viewMode === "member" ? !(order.memberConfirmedPayment || isMemberDone(order)) : !order.creditCardPaid && !order.profitReceived);
+  const adminSpreadRows = normalized.includes("unrealized")
+    ? financialRows.filter(({ order }) => !(order.adminPaidMember || order.memberPaid || order.profitReceived))
+    : normalized.includes("realized")
+      ? financialRows.filter(({ order }) => order.adminPaidMember || order.memberPaid || order.profitReceived)
+      : financialRows;
+  const rows = viewMode === "admin" && normalized.includes("spread")
+    ? adminSpreadRows
+    : normalized.includes("unrealized") ? unrealizedRows : normalized.includes("realized") ? realizedRows : normalized.includes("amount owed to me") || normalized.includes("member payout owed") || normalized.includes("expected payout") ? memberUnpaidRows : normalized.includes("credit owed") || normalized === "amount owed" ? openRows : financialRows;
+
+  if (viewMode === "admin" && (normalized.includes("spread") || normalized.includes("member payout") || normalized.includes("warehouse payout"))) {
+    const warehouse = rows.reduce((sum, row) => sum + row.payout.warehouseTotalPayout, 0);
+    const member = rows.reduce((sum, row) => sum + (row.order.memberPayoutAmount ?? row.payout.memberTotalPayout), 0);
+    return {
+      subtitle: `${rows.length} ${rows.length === 1 ? "order" : "orders"}`,
+      lines: [
+        { label: "Warehouse total payout", value: money(warehouse) },
+        { label: "Member total payout", value: money(member) },
+        { label: "Admin total spread", value: money(warehouse - member) },
+        { label: "Paid to member orders", value: String(rows.filter((row) => row.order.adminPaidMember || row.order.memberPaid).length) }
+      ],
+      formula: normalized.includes("spread") ? "Admin spread = warehouse total payout - member total payout" : "Payout total = sum of order payout amounts",
+      finalLabel: label,
+      finalValue
+    };
+  }
+
+  const totalPaid = rows.reduce((sum, row) => sum + row.financials.totalPaid, 0);
+  const cashback = rows.reduce((sum, row) => sum + row.financials.chaseCashback, 0);
+  const yaCashback = rows.reduce((sum, row) => sum + row.financials.youngAdultCashback, 0);
+  const creditOwed = rows.reduce((sum, row) => sum + row.financials.amountOwed, 0);
+  const payout = rows.reduce((sum, row) => sum + (viewMode === "member" ? row.order.memberPayoutAmount ?? row.payout.memberTotalPayout : row.financials.totalPayout), 0);
+  const yaBalance = rows.reduce((sum, row) => sum + row.financials.youngAdultBalanceApplied, 0);
+
+  return {
+    subtitle: `${rows.length} ${rows.length === 1 ? "order" : "orders"}`,
+    lines: [
+      { label: "Retail total", value: money(totalPaid) },
+      { label: "Cashback", value: money(cashback) },
+      { label: "Young Adult cashback", value: money(yaCashback) },
+      ...(yaBalance > 0 ? [{ label: "Used YA balance adjustment", value: `-${money(yaBalance)}` }] : []),
+      ...(normalized.includes("payout") || normalized.includes("owed to me") || normalized.includes("profit") ? [{ label: viewMode === "member" ? "Member payout" : "Payout", value: money(payout) }] : []),
+      ...(normalized.includes("profit") || normalized.includes("credit") || normalized.includes("owed") ? [{ label: "Credit owed", value: money(creditOwed) }] : [])
+    ],
+    formula: normalized.includes("profit") ? "Profit = payout - credit owed" : normalized.includes("cashback") ? "Total cashback = cashback + Young Adult cashback" : normalized.includes("total spent") ? "Total spent = sum of retail per unit x quantity" : normalized.includes("payout") || normalized.includes("owed to me") ? "Member payout = sum of member payout amounts" : "Credit owed = total paid - cashback - Young Adult cashback",
+    finalLabel: label,
+    finalValue,
+    note: yaBalance > 0 ? "Paid with YA Balance: no new cashback/profit/credit owed counted." : undefined
+  };
+}
+
+function CalculationLink({ value, breakdown, className }: { value: string; breakdown: CalculationBreakdown; className?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <span
+        role="button"
+        tabIndex={0}
+        title="Show calculation breakdown"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(true);
+          }
+        }}
+        className={cls("cursor-pointer rounded-sm underline decoration-dotted underline-offset-4 hover:text-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-400/60", className)}
+      >
+        {value}
+      </span>
+      {open && <CalculationModal breakdown={breakdown} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function CalculationModal({ breakdown, onClose }: { breakdown: CalculationBreakdown; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-md rounded-xl border border-cyan/20 bg-surface p-5 shadow-neon" onClick={(event) => event.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Calculation Breakdown</h2>
+            {breakdown.subtitle && <div className="mt-1 text-sm text-muted">{breakdown.subtitle}</div>}
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg border border-line p-2 text-muted hover:text-white" title="Close calculation breakdown">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="space-y-2">
+          {breakdown.lines.map((line) => (
+            <div key={line.label} className="flex items-start justify-between gap-4 border-b border-line/70 pb-2 text-sm last:border-0">
+              <span className="text-muted">{line.label}</span>
+              <span className={cls("text-right font-medium", line.muted ? "text-muted" : "text-white")}>{line.value}</span>
+            </div>
+          ))}
+        </div>
+        {breakdown.formula && <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-slate-200">{breakdown.formula}</div>}
+        {breakdown.note && <div className="mt-3 rounded-lg border border-fuchsia-300/25 bg-fuchsia-500/10 p-3 text-sm text-fuchsia-100">{breakdown.note}</div>}
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-green-300/25 bg-green-500/10 p-3">
+          <span className="text-sm font-medium text-green-100">{breakdown.finalLabel}</span>
+          <span className="text-lg font-semibold text-white">{breakdown.finalValue}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function orderCalculationValue(order: OrderWithRelations, label: string, value: string, viewMode: WorkflowViewMode) {
+  return isMoneyBreakdownLabel(label) && value.includes("$")
+    ? <CalculationLink value={value} breakdown={orderFinancialBreakdown(order, label, viewMode)} />
+    : value;
+}
+
 function reminderTone(severity: Reminder["severity"]) {
   if (severity === "overdue") return "border-white/30 bg-white/10";
   if (severity === "today") return "border-blue-300/40 bg-blue-500/10";
   return "border-slate-500/40 bg-slate-500/10";
+}
+
+function reminderCardTone(reminder: Reminder) {
+  if (reminder.priority === "high") return "border-red-400/55 bg-red-500/12";
+  if (reminder.priority === "warning") return "border-yellow-300/45 bg-yellow-500/10";
+  return reminderTone(reminder.severity);
 }
 
 function memberName(order: OrderWithRelations) {
@@ -413,6 +682,8 @@ function actionButtonLabel(action: string, viewMode: WorkflowViewMode) {
 }
 
 function reminderLabel(reminder: Reminder) {
+  if (reminder.type === "missing_amazon_account") return "Amazon account missing";
+  if (reminder.type === "missing_buy_group") return "Buy group / destination missing";
   if (reminder.type === "missing_info") return reminder.notes ?? "Missing order info";
   if (reminder.type === "submit_tracking") return reminder.order.trackingNumber ? "Tracking needs warehouse submission" : "Tracking missing";
   if (reminder.type === "check_payout") return "Payout reminder";
@@ -420,52 +691,71 @@ function reminderLabel(reminder: Reminder) {
   return reminder.label;
 }
 
+function alertTone(priority: OrderCardAlert["priority"]) {
+  if (priority === "high") return "border-red-400/60 bg-red-500/15 text-red-50";
+  if (priority === "warning") return "border-yellow-300/50 bg-yellow-500/12 text-yellow-50";
+  return "border-blue-300/35 bg-blue-500/10 text-blue-100";
+}
+
+function alertBadgeTone(priority: OrderCardAlert["priority"]) {
+  if (priority === "high") return "bg-red-500/25 text-red-100";
+  if (priority === "warning") return "bg-yellow-400/20 text-yellow-100";
+  return "bg-blue-500/20 text-blue-100";
+}
+
+function alertBadgeLabel(priority: OrderCardAlert["priority"]) {
+  if (priority === "high") return "Urgent";
+  if (priority === "warning") return "Warning";
+  return "Alert";
+}
+
 function isDoneReminder(reminder: Reminder) {
   return reminder.type === "confirm_profit" || reminder.id.endsWith(":profit") || reminder.label.toLowerCase().includes("done reminder");
 }
 
 function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewMode, reminders: Reminder[], trackingChangeAlerts: TrackingChangeAlertItem[], deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]) {
-  if (viewMode !== "admin") return [];
-
   const alerts: OrderCardAlert[] = [];
-  const urgentAlert = deliveryBeforeTrackingAlerts.find((alert) => alert.orderId === order.id);
-  const hasUrgentDeliveryState = (order.memberMarkedDelivered || order.delivered) && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted);
-  if (urgentAlert || hasUrgentDeliveryState) {
-    alerts.push({
-      id: urgentAlert?.id ?? `${order.id}:urgent-delivery`,
-      kind: "urgent_delivery",
-      priority: "high",
-      label: "Urgent: delivered before warehouse tracking submission.",
-      detail: order.trackingNumber ? `Tracking ${order.trackingNumber}` : "Tracking missing",
-      action: order.trackingNumber ? "submitToWarehouse" : "open",
-      reviewAction: urgentAlert ? "reviewDeliveryBeforeTracking" : undefined
-    });
-  }
+  if (viewMode === "admin") {
+    const urgentAlert = deliveryBeforeTrackingAlerts.find((alert) => alert.orderId === order.id);
+    if (urgentAlert) {
+      alerts.push({
+        id: urgentAlert.id,
+        kind: "urgent_delivery",
+        priority: "high",
+        label: "Urgent: delivered before warehouse tracking submission.",
+        detail: order.trackingNumber ? `Tracking ${order.trackingNumber}` : "Tracking missing",
+        action: order.trackingNumber ? "submitToWarehouse" : "open",
+        reviewAction: "reviewDeliveryBeforeTracking"
+      });
+    }
 
-  for (const alert of trackingChangeAlerts.filter((item) => item.orderId === order.id)) {
-    alerts.push({
-      id: alert.id,
-      kind: "tracking_change",
-      priority: "normal",
-      label: "Tracking number changed by member.",
-      detail: `${alert.oldTrackingNumber || "Empty"} -> ${alert.newTrackingNumber || "Empty"}`,
-      action: "open",
-      reviewAction: "reviewTrackingChange"
-    });
+    for (const alert of trackingChangeAlerts.filter((item) => item.orderId === order.id)) {
+      alerts.push({
+        id: alert.id,
+        kind: "tracking_change",
+        priority: "normal",
+        label: "Tracking number changed by member.",
+        detail: `${alert.oldTrackingNumber || "Empty"} -> ${alert.newTrackingNumber || "Empty"}`,
+        action: "open",
+        reviewAction: "reviewTrackingChange"
+      });
+    }
   }
 
   for (const reminder of reminders.filter((item) => item.order.id === order.id && !isDoneReminder(item))) {
     alerts.push({
       id: reminder.id,
       kind: "reminder",
-      priority: reminder.severity === "overdue" ? "high" : "normal",
+      priority: reminder.priority ?? (reminder.severity === "overdue" ? "high" : "normal"),
       label: reminderLabel(reminder),
       detail: `Due ${shortDate(reminder.dueDate)}`,
-      action: reminder.type === "submit_tracking" && order.trackingNumber ? "submitToWarehouse" : "open"
+      action: reminder.type === "submit_tracking" && order.trackingNumber ? "submitToWarehouse" : "open",
+      reminderType: reminder.type
     });
   }
 
-  return alerts.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "high" ? -1 : 1)).slice(0, 3);
+  const priorityRank: Record<OrderCardAlert["priority"], number> = { high: 0, warning: 1, normal: 2 };
+  return alerts.sort((a, b) => priorityRank[a.priority] - priorityRank[b.priority]).slice(0, 3);
 }
 
 function isMemberDone(order: OrderWithRelations) {
@@ -683,7 +973,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
             />
           )}
           {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
-          {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} />}
+          {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
           {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
           {section === "queues" && (
             <div className="space-y-4">
@@ -711,7 +1001,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
           {section === "memberPayouts" && <MemberPayoutsView orders={orders} activeWorkspace={activeWorkspace} />}
           {section === "trackingNeeded" && <TrackingNeededView orders={orders} />}
           {section === "myPayouts" && <MyPayoutsView orders={orders} />}
-          {section === "analytics" && <AnalyticsView orders={orders} />}
+          {section === "analytics" && <AnalyticsView orders={orders} viewMode={viewMode} />}
           {section === "importExport" && <ImportExportView orders={orders} />}
           {section === "settings" && <SettingsView profile={profile} activeWorkspace={activeWorkspace} workspaces={workspaces} />}
         </div>
@@ -757,30 +1047,21 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
 }) {
   const personalMetrics = [
     { label: "Open Orders", value: totals.openOrders.toString(), featured: true },
-    { label: "Amount Owed", value: money(totals.amountOwed), featured: true },
+    { label: "Total Spent", value: money(totals.totalSpent), featured: true },
+    { label: "Total Cashback", value: money(totals.totalCashback), featured: true },
+    { label: "Credit Owed", value: money(totals.amountOwed), featured: true },
     { label: "Realized Profit", value: money(totals.realizedProfit), featured: true },
-    { label: "Unrealized Profit", value: money(totals.unrealizedProfit), featured: true },
-    { label: "Tracking Submitted", value: orders.filter((order) => order.trackingSubmitted || order.trackingNumber).length.toString(), featured: false },
-    { label: "Delivered", value: orders.filter((order) => order.delivered).length.toString(), featured: false },
-    { label: "Scanned", value: orders.filter((order) => order.scanned).length.toString(), featured: false },
-    { label: "Payout from Warehouse", value: orders.filter((order) => order.paidOut).length.toString(), featured: false },
-    { label: "Credit Paid", value: orders.filter((order) => order.creditCardPaid).length.toString(), featured: false }
+    { label: "Unrealized Profit", value: money(totals.unrealizedProfit), featured: true }
   ];
   const adminMetrics = [
     { label: "Open Orders", value: totals.openOrders.toString(), featured: true },
+    { label: "Member Total Spend", value: money(totals.totalSpent), featured: true },
     { label: "Warehouse Payout Expected", value: money(totals.warehousePayoutExpected), featured: true },
     { label: "Member Payout Owed", value: money(totals.memberPayoutOwed), featured: true },
     { label: "Admin Spread Realized", value: money(totals.adminSpreadRealized), featured: true },
     { label: "Admin Spread Unrealized", value: money(totals.adminSpreadUnrealized), featured: true },
-    { label: "Amount Owed", value: money(totals.amountOwed), featured: true },
     { label: "Realized Profit", value: money(totals.realizedProfit), featured: true },
-    { label: "Unrealized Profit", value: money(totals.unrealizedProfit), featured: true },
-    { label: "Overdue Reminders", value: totals.overdueReminders.toString(), featured: true },
-    { label: "Total Spent", value: money(totals.totalSpent), featured: false },
-    { label: "Total Cashback", value: money(totals.totalCashback), featured: false },
-    { label: "Tracking Received from Member", value: orders.filter((order) => order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)).length.toString(), featured: false },
-    { label: "Waiting Scan", value: orders.filter((order) => (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.scanned)).length.toString(), featured: false },
-    { label: "Members To Pay", value: orders.filter((order) => (order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid)).length.toString(), featured: false }
+    { label: "Unrealized Profit", value: money(totals.unrealizedProfit), featured: true }
   ];
   const memberFinancials = orders.reduce(
     (acc, order) => {
@@ -791,9 +1072,9 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
 
       acc.totalSpent += financials.totalPaid;
       acc.totalCashback += financials.totalCashback;
-      if (!done) acc.expectedMemberPayout += payout.memberTotalPayout;
+      if (!(order.adminPaidMember || order.memberPaid)) acc.expectedMemberPayout += order.memberPayoutAmount ?? payout.memberTotalPayout;
       if (!(order.adminPaidMember || order.memberPaid)) acc.amountOwedToMe += order.memberPayoutAmount ?? payout.memberTotalPayout;
-      if (!done) acc.creditOwed += financials.amountOwed;
+      if (order.memberConfirmedPayment && !done) acc.creditOwed += financials.amountOwed;
       if (paymentConfirmed) acc.realizedProfit += financials.profit;
       else acc.unrealizedProfit += financials.profit;
 
@@ -801,22 +1082,15 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
     },
     { totalSpent: 0, totalCashback: 0, expectedMemberPayout: 0, amountOwedToMe: 0, creditOwed: 0, realizedProfit: 0, unrealizedProfit: 0 }
   );
-  const memberMetricCount = (stage: StageFilter) => orders.filter((order) => matchesMemberStage(order, stage)).length.toString();
   const memberMetrics = [
     { label: "My Open Orders", value: totals.openOrders.toString(), featured: true },
-    { label: "Expected Payout To Member", value: money(memberFinancials.expectedMemberPayout), featured: true },
     { label: "Total Spent", value: money(memberFinancials.totalSpent), featured: true },
     { label: "Total Cashback", value: money(memberFinancials.totalCashback), featured: true },
     { label: "Realized Profit", value: money(memberFinancials.realizedProfit), featured: true },
     { label: "Unrealized Profit", value: money(memberFinancials.unrealizedProfit), featured: true },
+    { label: "Expected Payout To Member", value: money(memberFinancials.expectedMemberPayout), featured: true },
     { label: "Amount Owed To Me", value: money(memberFinancials.amountOwedToMe), featured: true },
-    { label: "Credit Owed", value: money(memberFinancials.creditOwed), featured: true },
-    { label: "Ordered / Tracking Needed", value: memberMetricCount("ORDERED"), featured: false },
-    { label: "Tracking Sent To Admin", value: memberMetricCount("MEMBER_TRACKING_SENT"), featured: false },
-    { label: "Delivered", value: memberMetricCount("DELIVERED"), featured: false },
-    { label: "Awaiting Payment", value: memberMetricCount("MEMBER_AWAITING_PAYMENT"), featured: false },
-    { label: "Payment Confirmed / Credit Owed", value: memberMetricCount("MEMBER_PAYMENT_CONFIRMED"), featured: false },
-    { label: "Done", value: memberMetricCount("MEMBER_DONE"), featured: false }
+    { label: "Credit Owed", value: money(memberFinancials.creditOwed), featured: true }
   ];
   const metrics = viewMode === "admin" ? adminMetrics : viewMode === "personal" ? personalMetrics : memberMetrics;
   const dashboardQueues = viewMode === "admin" ? adminStages.slice(1) : viewMode === "personal" ? personalStages.slice(1) : memberStages.slice(1);
@@ -842,7 +1116,11 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
               )}
             >
               <div className={cls("max-w-full whitespace-normal break-words font-medium uppercase leading-snug tracking-[.12em]", isMemberDashboard ? "text-[11px]" : "text-xs", metric.featured ? "text-slate-300" : "text-muted")}>{metric.label}</div>
-              <div className={cls("mt-3 max-w-full break-words font-semibold leading-none text-white [overflow-wrap:anywhere]", metric.featured ? "text-[clamp(1.65rem,2.6vw,2.35rem)]" : "text-[clamp(1.25rem,1.8vw,1.75rem)]")}>{metric.value}</div>
+              <div className={cls("mt-3 max-w-full break-words font-semibold leading-none text-white [overflow-wrap:anywhere]", metric.featured ? "text-[clamp(1.65rem,2.6vw,2.35rem)]" : "text-[clamp(1.25rem,1.8vw,1.75rem)]")}>
+                {metric.value.includes("$") && isMoneyBreakdownLabel(metric.label) ? (
+                  <CalculationLink value={metric.value} breakdown={aggregateBreakdown(metric.label, orders, viewMode, metric.value)} />
+                ) : metric.value}
+              </div>
               {metric.featured && <div className="mt-3 h-1 w-16 rounded-full bg-gradient-to-r from-blue-400 to-green-400" />}
             </div>
           ))}
@@ -916,16 +1194,17 @@ function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAle
           <div className="mb-2 text-xs font-semibold uppercase tracking-[.15em] text-muted">{group === "today" ? "Due Today" : group}</div>
           <div className="space-y-2">
             {actionableReminders.filter((item) => item.severity === group).slice(0, 8).map((item) => (
-              <div key={item.id} className={cls("rounded-lg border p-3", reminderTone(item.severity))}>
+              <div key={item.id} className={cls("rounded-lg border p-3", reminderCardTone(item))}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium">{item.label}</div>
+                    <div className="text-sm font-medium">{reminderLabel(item)}</div>
                     <div className="mt-1 text-xs text-muted">{item.order.itemName} · due {shortDate(item.dueDate)}</div>
                     {item.notes && <div className="mt-1 text-xs text-blue-200">{item.notes}</div>}
                   </div>
                   <button onClick={() => setSelectedOrder(item.order)} className="rounded-md border border-line p-1.5 text-muted hover:text-white" title="Open order">
                     <ChevronRight size={15} />
                   </button>
+                  <ReminderActionMenu reminder={item} onOpen={() => setSelectedOrder(item.order)} />
                 </div>
                 <ReminderAction reminder={item} buyGroups={buyGroups} />
               </div>
@@ -935,6 +1214,44 @@ function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAle
         </div>
       ))}
     </section>
+  );
+}
+
+function AlertMenu({ children }: { children: React.ReactNode }) {
+  return (
+    <details className="relative">
+      <summary className="list-none rounded-md border border-white/10 p-1.5 text-muted hover:text-white [&::-webkit-details-marker]:hidden" title="Alert actions">
+        <MoreHorizontal size={15} />
+      </summary>
+      <div className="absolute right-0 z-30 mt-1 w-44 rounded-lg border border-line bg-surface p-1.5 shadow-neon">
+        {children}
+      </div>
+    </details>
+  );
+}
+
+function MenuButton({ children }: { children: React.ReactNode }) {
+  return <button type="submit" className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs text-muted hover:bg-white/8 hover:text-white">{children}</button>;
+}
+
+function ReminderActionMenu({ reminder, onOpen }: { reminder: Reminder; onOpen: () => void }) {
+  return (
+    <AlertMenu>
+      <button type="button" onClick={onOpen} className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs text-muted hover:bg-white/8 hover:text-white">Open</button>
+      <form action={reviewReminder}>
+        <input type="hidden" name="workspaceId" value={reminder.order.workspaceId ?? ""} />
+        <input type="hidden" name="orderId" value={reminder.order.id} />
+        <input type="hidden" name="type" value={reminder.type} />
+        <MenuButton>Mark reviewed</MenuButton>
+      </form>
+      <form action={snoozeReminder}>
+        <input type="hidden" name="workspaceId" value={reminder.order.workspaceId ?? ""} />
+        <input type="hidden" name="orderId" value={reminder.order.id} />
+        <input type="hidden" name="type" value={reminder.type} />
+        <input type="hidden" name="hours" value="24" />
+        <MenuButton>Snooze 24h</MenuButton>
+      </form>
+    </AlertMenu>
   );
 }
 
@@ -954,13 +1271,22 @@ function TrackingChangeAlertCard({ alert, setSelectedOrder }: { alert: TrackingC
         <button onClick={() => setSelectedOrder(alert.order)} className="rounded-md border border-line p-1.5 text-muted hover:text-white" title="Open order">
           <ChevronRight size={15} />
         </button>
+        <AlertMenu>
+          <button type="button" onClick={() => setSelectedOrder(alert.order)} className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs text-muted hover:bg-white/8 hover:text-white">Open</button>
+          <form action={reviewTrackingChangeAlert}>
+            <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+            <input type="hidden" name="alertId" value={alert.id} />
+            <MenuButton>Mark reviewed</MenuButton>
+          </form>
+          <form action={snoozeTrackingChangeAlert}>
+            <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+            <input type="hidden" name="alertId" value={alert.id} />
+            <input type="hidden" name="hours" value="24" />
+            <MenuButton>Snooze 24h</MenuButton>
+          </form>
+        </AlertMenu>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <form action={reviewTrackingChangeAlert}>
-          <input type="hidden" name="workspaceId" value={alert.workspaceId} />
-          <input type="hidden" name="alertId" value={alert.id} />
-          <button className="rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium hover:bg-white/20">Mark reviewed</button>
-        </form>
         <form action={markWarehouseTrackingUpdated}>
           <input type="hidden" name="workspaceId" value={alert.workspaceId} />
           <input type="hidden" name="alertId" value={alert.id} />
@@ -994,6 +1320,20 @@ function DeliveryBeforeTrackingAlertCard({ alert, setSelectedOrder }: { alert: D
         <button onClick={() => setSelectedOrder(alert.order)} className="rounded-md border border-red-200/30 p-1.5 text-red-100 hover:bg-red-400/10 hover:text-white" title="Open order">
           <ChevronRight size={15} />
         </button>
+        <AlertMenu>
+          <button type="button" onClick={() => setSelectedOrder(alert.order)} className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs text-muted hover:bg-white/8 hover:text-white">Open</button>
+          <form action={reviewDeliveryBeforeTrackingAlert}>
+            <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+            <input type="hidden" name="alertId" value={alert.id} />
+            <MenuButton>Mark reviewed</MenuButton>
+          </form>
+          <form action={snoozeDeliveryBeforeTrackingAlert}>
+            <input type="hidden" name="workspaceId" value={alert.workspaceId} />
+            <input type="hidden" name="alertId" value={alert.id} />
+            <input type="hidden" name="minutes" value="1440" />
+            <MenuButton>Snooze 24h</MenuButton>
+          </form>
+        </AlertMenu>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {alert.order.trackingNumber && (
@@ -1004,23 +1344,36 @@ function DeliveryBeforeTrackingAlertCard({ alert, setSelectedOrder }: { alert: D
             <button className="rounded-md border border-red-200/40 bg-red-500/20 px-2.5 py-1.5 text-xs font-medium text-red-50 hover:bg-red-500/30">Submit tracking to warehouse</button>
           </form>
         )}
-        <form action={reviewDeliveryBeforeTrackingAlert}>
-          <input type="hidden" name="workspaceId" value={alert.workspaceId} />
-          <input type="hidden" name="alertId" value={alert.id} />
-          <button className="rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium hover:bg-white/20">Mark reviewed</button>
-        </form>
-        <form action={snoozeDeliveryBeforeTrackingAlert}>
-          <input type="hidden" name="workspaceId" value={alert.workspaceId} />
-          <input type="hidden" name="alertId" value={alert.id} />
-          <input type="hidden" name="minutes" value="60" />
-          <button className="rounded-md border border-red-200/30 px-2.5 py-1.5 text-xs text-red-100 hover:bg-red-400/10">Snooze</button>
-        </form>
       </div>
     </div>
   );
 }
 
 function ReminderAction({ reminder, buyGroups }: { reminder: Reminder; buyGroups: BuyGroup[] }) {
+  if (reminder.type === "missing_amazon_account") {
+    if (!reminder.action.startsWith("Request")) return null;
+    return (
+      <form action={requestMissingOrderInfo} className="mt-3">
+        <input type="hidden" name="workspaceId" value={reminder.order.workspaceId ?? ""} />
+        <input type="hidden" name="orderId" value={reminder.order.id} />
+        <input type="hidden" name="type" value="missing_amazon_account" />
+        <button className="rounded-md border border-yellow-300/35 bg-yellow-500/10 px-2.5 py-1.5 text-xs font-medium text-yellow-100 hover:bg-yellow-500/20">Request account from member</button>
+      </form>
+    );
+  }
+
+  if (reminder.type === "missing_buy_group") {
+    if (!reminder.action.startsWith("Request")) return null;
+    return (
+      <form action={requestMissingOrderInfo} className="mt-3">
+        <input type="hidden" name="workspaceId" value={reminder.order.workspaceId ?? ""} />
+        <input type="hidden" name="orderId" value={reminder.order.id} />
+        <input type="hidden" name="type" value="missing_buy_group" />
+        <button className="rounded-md border border-red-300/40 bg-red-500/15 px-2.5 py-1.5 text-xs font-medium text-red-100 hover:bg-red-500/25">Request buy group from member</button>
+      </form>
+    );
+  }
+
   if (reminder.type === "missing_info" && reminder.notes?.includes("buy group")) {
     return (
       <form action={setOrderBuyGroup} className="mt-3 flex items-center gap-2">
@@ -1360,7 +1713,18 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
             Select
           </label>
         )}
-        <button onClick={onOpen} className="min-w-0 text-left xl:flex-1">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onOpen}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onOpen();
+            }
+          }}
+          className="min-w-0 cursor-pointer text-left xl:flex-1"
+        >
           <div className="flex items-center gap-2">
             <h3 className="truncate font-semibold">{order.itemName}</h3>
             <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{viewMode === "personal" ? personalWorkflowLabel(order) : memberSafe ? memberWorkflowLabel(order) : adminWorkflowLabel(order)}</span>
@@ -1370,12 +1734,12 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
           <div className="mt-3 flex flex-wrap gap-2">
             {(isAdmin || viewMode === "personal" ? statusFields : statusFields.concat(fieldsByStage[displayStage as OrderStage].slice(1, 5))).map(([label, value]) => (
               <span key={label} className="rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
-                {label}: <span className="text-white">{value}</span>
+                {label}: <span className="text-white">{orderCalculationValue(order, label, value, viewMode)}</span>
               </span>
             ))}
             {moneyFields.map(([label, value]) => (
               <span key={label} className="rounded-md border border-green-300/25 bg-green-500/10 px-2.5 py-1.5 text-xs text-green-100">
-                {label}: <span className="text-white">{value}</span>
+                {label}: <span className="text-white">{orderCalculationValue(order, label, value, viewMode)}</span>
               </span>
             ))}
           </div>
@@ -1387,15 +1751,15 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
               </span>
             ))}
           </div>
-        </button>
-        {alerts.length > 0 && <OrderCardAlerts order={order} alerts={alerts} onOpen={onOpen} />}
+        </div>
+        {alerts.length > 0 && <OrderCardAlerts order={order} alerts={alerts} onOpen={onOpen} viewMode={viewMode} />}
         <StageActions order={order} onOpen={onOpen} isAdmin={isAdmin} viewMode={viewMode} />
       </div>
     </article>
   );
 }
 
-function OrderCardAlerts({ order, alerts, onOpen }: { order: OrderWithRelations; alerts: OrderCardAlert[]; onOpen: () => void }) {
+function OrderCardAlerts({ order, alerts, onOpen, viewMode }: { order: OrderWithRelations; alerts: OrderCardAlert[]; onOpen: () => void; viewMode: WorkflowViewMode }) {
   return (
     <div className="w-full xl:order-3">
       <div className="mt-1 grid gap-1.5 lg:grid-cols-2 2xl:grid-cols-3">
@@ -1404,14 +1768,12 @@ function OrderCardAlerts({ order, alerts, onOpen }: { order: OrderWithRelations;
             key={alert.id}
             className={cls(
               "flex min-w-0 flex-wrap items-center gap-2 rounded-md border px-2.5 py-2 text-xs",
-              alert.priority === "high"
-                ? "border-red-400/60 bg-red-500/15 text-red-50"
-                : "border-blue-300/35 bg-blue-500/10 text-blue-100"
+              alertTone(alert.priority)
             )}
           >
-            <span className={cls("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[.12em]", alert.priority === "high" ? "bg-red-500/25 text-red-100" : "bg-blue-500/20 text-blue-100")}>
+            <span className={cls("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[.12em]", alertBadgeTone(alert.priority))}>
               <AlertTriangle size={12} />
-              {alert.priority === "high" ? "Urgent" : "Alert"}
+              {alertBadgeLabel(alert.priority)}
             </span>
             <span className="min-w-0 flex-1 truncate font-medium">{alert.label}</span>
             {alert.detail && <span className="truncate text-muted">{alert.detail}</span>}
@@ -1425,20 +1787,72 @@ function OrderCardAlerts({ order, alerts, onOpen }: { order: OrderWithRelations;
             ) : (
               <button type="button" onClick={onOpen} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white hover:bg-white/10">Open</button>
             )}
-            {alert.reviewAction === "reviewDeliveryBeforeTracking" && (
-              <form action={reviewDeliveryBeforeTrackingAlert}>
-                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
-                <input type="hidden" name="alertId" value={alert.id} />
-                <button className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white hover:bg-white/10">Mark reviewed</button>
-              </form>
-            )}
-            {alert.reviewAction === "reviewTrackingChange" && (
-              <form action={reviewTrackingChangeAlert}>
-                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
-                <input type="hidden" name="alertId" value={alert.id} />
-                <button className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white hover:bg-white/10">Mark reviewed</button>
-              </form>
-            )}
+            <AlertMenu>
+              <button type="button" onClick={onOpen} className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs text-muted hover:bg-white/8 hover:text-white">Open</button>
+              {alert.reviewAction === "reviewDeliveryBeforeTracking" && (
+                <>
+                  <form action={reviewDeliveryBeforeTrackingAlert}>
+                    <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                    <input type="hidden" name="alertId" value={alert.id} />
+                    <MenuButton>Mark reviewed</MenuButton>
+                  </form>
+                  <form action={snoozeDeliveryBeforeTrackingAlert}>
+                    <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                    <input type="hidden" name="alertId" value={alert.id} />
+                    <input type="hidden" name="minutes" value="1440" />
+                    <MenuButton>Snooze 24h</MenuButton>
+                  </form>
+                </>
+              )}
+              {alert.reviewAction === "reviewTrackingChange" && (
+                <>
+                  <form action={reviewTrackingChangeAlert}>
+                    <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                    <input type="hidden" name="alertId" value={alert.id} />
+                    <MenuButton>Mark reviewed</MenuButton>
+                  </form>
+                  <form action={snoozeTrackingChangeAlert}>
+                    <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                    <input type="hidden" name="alertId" value={alert.id} />
+                    <input type="hidden" name="hours" value="24" />
+                    <MenuButton>Snooze 24h</MenuButton>
+                  </form>
+                </>
+              )}
+              {alert.reminderType && (
+                <>
+                  {viewMode === "admin" && alert.reminderType === "missing_amazon_account" && (
+                    <form action={requestMissingOrderInfo}>
+                      <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                      <input type="hidden" name="orderId" value={order.id} />
+                      <input type="hidden" name="type" value="missing_amazon_account" />
+                      <MenuButton>Request account from member</MenuButton>
+                    </form>
+                  )}
+                  {viewMode === "admin" && alert.reminderType === "missing_buy_group" && (
+                    <form action={requestMissingOrderInfo}>
+                      <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                      <input type="hidden" name="orderId" value={order.id} />
+                      <input type="hidden" name="type" value="missing_buy_group" />
+                      <MenuButton>Request buy group from member</MenuButton>
+                    </form>
+                  )}
+                  <form action={reviewReminder}>
+                    <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                    <input type="hidden" name="orderId" value={order.id} />
+                    <input type="hidden" name="type" value={alert.reminderType} />
+                    <MenuButton>Mark reviewed</MenuButton>
+                  </form>
+                  <form action={snoozeReminder}>
+                    <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                    <input type="hidden" name="orderId" value={order.id} />
+                    <input type="hidden" name="type" value={alert.reminderType} />
+                    <input type="hidden" name="hours" value="24" />
+                    <MenuButton>Snooze 24h</MenuButton>
+                  </form>
+                </>
+              )}
+            </AlertMenu>
           </div>
         ))}
       </div>
@@ -1652,7 +2066,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
                 <Fact label="Paid to member" value={order.adminPaidMember || order.memberPaid ? "Yes" : "No"} />
                 <Fact label="Member confirmed payment / credit owed" value={yesNo(order.memberConfirmedPayment)} />
                 <Fact label="Member marked done" value={yesNo(order.memberMarkedDone || order.profitReceived)} />
-                <Fact label="Member payout" value={money(order.memberPayoutAmount ?? payout.memberTotalPayout)} />
+                <Fact label="Member payout" value={orderCalculationValue(order, "Member payout", money(order.memberPayoutAmount ?? payout.memberTotalPayout), viewMode)} />
               </>
             )}
           </div>
@@ -1681,8 +2095,14 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
             ] : [
               ["Member payout", money(order.memberPayoutAmount ?? payout.memberTotalPayout)],
+              ["Total Paid", money(financials.totalPaid)],
+              ["Cashback", money(financials.totalCashback)],
+              ["Young Adult Cashback", money(financials.youngAdultCashback)],
+              ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
+              ["Credit / Amount Owed", money(financials.amountOwed)],
+              ["Estimated Profit", money(financials.profit)],
               ["Payment status", order.memberConfirmedPayment ? "Payment confirmed / credit owed" : order.adminPaidMember || order.memberPaid ? "Payment sent" : "Open"]
-            ]).map(([label, value]) => <Fact key={label} label={label} value={value} />)}
+            ]).map(([label, value]) => <Fact key={label} label={label} value={orderCalculationValue(order, label, value, viewMode)} />)}
           </div>
           <div className="rounded-lg border border-line bg-surface/60 p-4">
             <div className="mb-3 text-sm font-semibold">Status History</div>
@@ -1779,14 +2199,17 @@ function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations
         : !(order.adminPaidMember || order.memberPaid)
     )
     .map((order) => ({ order, financials: calculateFinancials(order), payout: calculatePayoutBreakdown(order) }));
-  const totalOwed = rows.reduce((sum, item) => sum + (viewMode === "admin" ? item.payout.memberTotalPayout : item.financials.amountOwed), 0);
+  const totalOwed = rows.reduce((sum, item) => sum + (viewMode === "admin" ? item.order.memberPayoutAmount ?? item.payout.memberTotalPayout : item.financials.amountOwed), 0);
+  const totalLabel = viewMode === "member" ? "Credit Owed To Bank/Card" : viewMode === "personal" ? "Credit Owed" : "Member Payout Owed";
 
   return (
     <section className="rounded-lg border border-slate-400/30 bg-panel/80 p-4 shadow-glow">
       <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
-          <div className="text-xs uppercase tracking-[.12em] text-muted">{viewMode === "member" ? "Credit Owed To Bank/Card" : viewMode === "personal" ? "Credit Owed" : "Credit / Amount Owed"}</div>
-          <div className="mt-1 text-3xl font-semibold text-white">{money(totalOwed)}</div>
+          <div className="text-xs uppercase tracking-[.12em] text-muted">{totalLabel}</div>
+          <div className="mt-1 text-3xl font-semibold text-white">
+            <CalculationLink value={money(totalOwed)} breakdown={aggregateBreakdown(totalLabel, rows.map((row) => row.order), viewMode, money(totalOwed))} />
+          </div>
         </div>
         <div className="text-sm text-muted">{rows.length} open {rows.length === 1 ? "order" : "orders"}</div>
       </div>
@@ -1801,9 +2224,9 @@ function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations
               {viewMode === "admin" && <div className="mt-0.5 truncate text-xs text-muted">{memberName(order)}</div>}
             </div>
             <div className="text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
-            <Fact label="Total paid" value={money(financials.totalPaid)} />
-            <Fact label="Cashback" value={money(financials.totalCashback)} />
-            <Fact label={viewMode === "admin" ? "Member payout" : "Credit / owed"} value={money(viewMode === "admin" ? payout.memberTotalPayout : financials.amountOwed)} />
+            <Fact label="Total paid" value={orderCalculationValue(order, "Total paid", money(financials.totalPaid), viewMode)} />
+            <Fact label="Cashback" value={orderCalculationValue(order, "Cashback", money(financials.totalCashback), viewMode)} />
+            <Fact label={viewMode === "admin" ? "Member payout" : "Credit / owed"} value={orderCalculationValue(order, viewMode === "admin" ? "Member payout" : "Credit / owed", money(viewMode === "admin" ? order.memberPayoutAmount ?? payout.memberTotalPayout : financials.amountOwed), viewMode)} />
             <Fact label="Status" value={creditStatus(order, viewMode)} />
           </div>
         ))}
@@ -1832,7 +2255,7 @@ function AccountsView({ accounts, orders, workspaceId, viewMode }: { accounts: A
       <SummaryGrid>
         {accounts.map((account) => {
           const accountOrders = orders.filter((order) => order.amazonAccountId === account.id);
-          const summary = summarize(accountOrders);
+          const summary = summarize(accountOrders, viewMode);
           return (
             <div key={account.id} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
               <div className="mb-3 flex items-center justify-between">
@@ -1854,7 +2277,7 @@ function AccountsView({ accounts, orders, workspaceId, viewMode }: { accounts: A
   );
 }
 
-function BuyGroupsView({ buyGroups, orders, workspaceId }: { buyGroups: BuyGroup[]; orders: OrderWithRelations[]; workspaceId: string }) {
+function BuyGroupsView({ buyGroups, orders, workspaceId, viewMode }: { buyGroups: BuyGroup[]; orders: OrderWithRelations[]; workspaceId: string; viewMode: WorkflowViewMode }) {
   return (
     <div className="space-y-4">
       <form action={createBuyGroup} className="rounded-lg border border-blue-400/20 bg-panel/80 p-4 shadow-glow">
@@ -1871,7 +2294,7 @@ function BuyGroupsView({ buyGroups, orders, workspaceId }: { buyGroups: BuyGroup
       <SummaryGrid>
         {buyGroups.map((group) => {
           const groupOrders = orders.filter((order) => order.buyGroupId === group.id);
-          const summary = summarize(groupOrders);
+          const summary = summarize(groupOrders, viewMode);
           return (
             <div key={group.id} className="rounded-lg border border-blue-400/20 bg-panel/80 p-4 shadow-glow">
               <h2 className="mb-3 font-semibold">{group.name}</h2>
@@ -1999,10 +2422,12 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
         <div className="grid gap-3 md:grid-cols-3">
           <div>
             <div className="text-xs uppercase tracking-[.12em] text-muted">Total Owed To Members</div>
-            <div className="mt-1 text-3xl font-semibold text-white">{money(totalOwed)}</div>
+            <div className="mt-1 text-3xl font-semibold text-white">
+              <CalculationLink value={money(totalOwed)} breakdown={aggregateBreakdown("Member Payout Owed", openOrders, "admin", money(totalOwed))} />
+            </div>
           </div>
           <Fact label="Open Member Orders" value={String(openOrders.length)} />
-          <Fact label="Paid To Members" value={money(totalPaid)} />
+          <Fact label="Paid To Members" value={<CalculationLink value={money(totalPaid)} breakdown={aggregateBreakdown("Member Payout Paid", paidOrders, "admin", money(totalPaid))} />} />
         </div>
       </section>
       {members.map((member) => (
@@ -2013,8 +2438,8 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
               <div className="mt-1 text-xs text-muted">{member.orders.length} {member.orders.length === 1 ? "order" : "orders"}</div>
             </div>
             <div className="flex flex-wrap justify-end gap-2 text-right text-sm">
-              <span className="rounded-md border border-green-300/25 bg-green-500/10 px-2.5 py-1.5 text-green-100">Owed {money(member.unpaid)}</span>
-              <span className="rounded-md border border-line px-2.5 py-1.5 text-muted">Paid {money(member.paid)}</span>
+              <span className="rounded-md border border-green-300/25 bg-green-500/10 px-2.5 py-1.5 text-green-100">Owed <CalculationLink value={money(member.unpaid)} breakdown={aggregateBreakdown("Member Payout Owed", member.orders.filter((order) => !(order.adminPaidMember || order.memberPaid)), "admin", money(member.unpaid))} /></span>
+              <span className="rounded-md border border-line px-2.5 py-1.5 text-muted">Paid <CalculationLink value={money(member.paid)} breakdown={aggregateBreakdown("Member Payout Paid", member.orders.filter((order) => order.adminPaidMember || order.memberPaid), "admin", money(member.paid))} /></span>
             </div>
           </div>
           <div className="space-y-2">
@@ -2036,9 +2461,9 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
                     </div>
                     <div className="mt-0.5 truncate text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
                   </div>
-                  <Fact label="Total paid" value={money(financials.totalPaid)} />
-                  <Fact label="Cashback" value={money(financials.totalCashback)} />
-                  <Fact label="Owed to member" value={money(owedToMember)} />
+                  <Fact label="Total paid" value={orderCalculationValue(order, "Total paid", money(financials.totalPaid), "admin")} />
+                  <Fact label="Cashback" value={orderCalculationValue(order, "Cashback", money(financials.totalCashback), "admin")} />
+                  <Fact label="Owed to member" value={orderCalculationValue(order, "Owed to member", money(owedToMember), "admin")} />
                   <Fact label="Status" value={status} />
                   {!paidToMember ? (
                     <form action={quickAction}>
@@ -2076,12 +2501,15 @@ function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
   const paymentSent = orders.filter((order) => (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment);
   const confirmed = orders.filter((order) => order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived));
   const done = orders.filter((order) => order.memberMarkedDone || order.profitReceived);
+  const amountOwedToMe = unpaid.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), 0);
   return (
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-4">
       <div className="rounded-lg border border-green-400/20 bg-panel/80 p-4 shadow-glow">
         <div className="text-xs uppercase tracking-[.12em] text-muted">Amount Owed To Me</div>
-        <div className="mt-2 text-3xl font-semibold">{money(unpaid.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), 0))}</div>
+        <div className="mt-2 text-3xl font-semibold">
+          <CalculationLink value={money(amountOwedToMe)} breakdown={aggregateBreakdown("Amount Owed To Me", unpaid, "member", money(amountOwedToMe))} />
+        </div>
       </div>
       <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-glow">
         <div className="text-xs uppercase tracking-[.12em] text-muted">Payment Sent</div>
@@ -2103,7 +2531,7 @@ function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
             <input type="hidden" name="id" value={order.id} />
             <input type="hidden" name="action" value="memberConfirmPayment" />
             <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm"><span className="truncate">{order.itemName}</span><YoungAdultBalanceBadge order={order} /></span>
-            <span className="text-sm text-muted">{money(order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout)}</span>
+            <span className="text-sm text-muted">{orderCalculationValue(order, "Member payout", money(order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), "member")}</span>
             <button className="rounded-md border border-blue-300/40 px-2.5 py-1.5 text-xs text-blue-100">Confirm Payment</button>
           </form>
         ))}
@@ -2137,21 +2565,21 @@ function groupOrdersByMember(orders: OrderWithRelations[]) {
   return Array.from(map.values()).sort((a, b) => b.unpaid - a.unpaid);
 }
 
-function AnalyticsView({ orders }: { orders: OrderWithRelations[] }) {
+function AnalyticsView({ orders, viewMode }: { orders: OrderWithRelations[]; viewMode: WorkflowViewMode }) {
   const [visibleMonth, setVisibleMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
   const groups = [
-    ["Realized profit by Amazon account", groupProfit(orders, (order) => order.amazonAccount?.name ?? "Missing account", "realized")],
-    ["Unrealized profit by Amazon account", groupProfit(orders, (order) => order.amazonAccount?.name ?? "Missing account", "unrealized")],
-    ["Realized profit by buy group", groupProfit(orders, (order) => order.buyGroup?.name ?? "Missing buy group", "realized")],
-    ["Unrealized profit by buy group", groupProfit(orders, (order) => order.buyGroup?.name ?? "Missing buy group", "unrealized")],
-    ["Realized profit by destination", groupProfit(orders, (order) => order.buyGroup?.name ?? order.warehouse?.name ?? "Missing destination", "realized")],
-    ["Unrealized profit by destination", groupProfit(orders, (order) => order.buyGroup?.name ?? order.warehouse?.name ?? "Missing destination", "unrealized")]
+    ["Realized profit by Amazon account", groupProfit(orders, (order) => order.amazonAccount?.name ?? "Missing account", "realized", viewMode)],
+    ["Unrealized profit by Amazon account", groupProfit(orders, (order) => order.amazonAccount?.name ?? "Missing account", "unrealized", viewMode)],
+    ["Realized profit by buy group", groupProfit(orders, (order) => order.buyGroup?.name ?? "Missing buy group", "realized", viewMode)],
+    ["Unrealized profit by buy group", groupProfit(orders, (order) => order.buyGroup?.name ?? "Missing buy group", "unrealized", viewMode)],
+    ["Realized profit by destination", groupProfit(orders, (order) => order.buyGroup?.name ?? order.warehouse?.name ?? "Missing destination", "realized", viewMode)],
+    ["Unrealized profit by destination", groupProfit(orders, (order) => order.buyGroup?.name ?? order.warehouse?.name ?? "Missing destination", "unrealized", viewMode)]
   ];
-  const calendarDays = buildAnalyticsCalendar(orders, visibleMonth);
-  const profitSeries = buildProfitSeries(orders);
+  const calendarDays = buildAnalyticsCalendar(orders, visibleMonth, viewMode);
+  const profitSeries = buildProfitSeries(orders, viewMode);
   const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(visibleMonth);
   const monthProfit = calendarDays.reduce((sum, day) => sum + day.realizedProfit, 0);
   const monthEvents = calendarDays.reduce((sum, day) => sum + day.eventCount, 0);
@@ -2257,7 +2685,30 @@ function addMonths(date: Date, months: number) {
   return new Date(date.getFullYear(), date.getMonth() + months, 1);
 }
 
-function buildAnalyticsCalendar(orders: OrderWithRelations[], visibleMonth: Date) {
+function orderProfitForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "admin") return calculatePayoutBreakdown(order).adminTotalSpread;
+  return calculateFinancials(order).profit;
+}
+
+function isRealizedForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "admin") return (order.adminReceivedPayoutFromWarehouse || order.paidOut) && (order.adminPaidMember || order.memberPaid);
+  if (viewMode === "member") return order.memberConfirmedPayment || order.memberMarkedDone || order.profitReceived;
+  return order.creditCardPaid;
+}
+
+function isUnrealizedForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "admin") return !isAdminDone(order) && !isRealizedForView(order, viewMode);
+  if (viewMode === "member") return !isMemberDone(order) && !isRealizedForView(order, viewMode);
+  return !order.creditCardPaid && !order.profitReceived;
+}
+
+function realizedDateForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "admin") return order.adminPaidMemberAt ?? order.memberPaidAt ?? order.paidOutAt;
+  if (viewMode === "member") return order.memberConfirmedPaymentAt ?? order.memberMarkedDoneAt ?? order.profitReceivedAt;
+  return order.creditCardPaidAt;
+}
+
+function buildAnalyticsCalendar(orders: OrderWithRelations[], visibleMonth: Date, viewMode: WorkflowViewMode) {
   const first = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
   const start = new Date(first);
   start.setDate(first.getDate() - first.getDay());
@@ -2290,23 +2741,23 @@ function buildAnalyticsCalendar(orders: OrderWithRelations[], visibleMonth: Date
   };
 
   for (const order of orders) {
-    const financials = calculateFinancials(order);
     bump(order.createdAt, "ordered");
     bump(order.deliveredAt, "delivered");
     bump(order.scannedAt, "scanned");
     bump(order.paidOutAt, "paidOut");
-    if (order.creditCardPaid) bump(order.creditCardPaidAt, "cardPaid", financials.profit);
+    if (isRealizedForView(order, viewMode)) bump(realizedDateForView(order, viewMode), "cardPaid", orderProfitForView(order, viewMode));
   }
 
   return days;
 }
 
-function buildProfitSeries(orders: OrderWithRelations[]) {
+function buildProfitSeries(orders: OrderWithRelations[], viewMode: WorkflowViewMode) {
   const daily = new Map<string, number>();
   for (const order of orders) {
-    if (!order.creditCardPaid || !order.creditCardPaidAt) continue;
-    const key = dateKey(order.creditCardPaidAt);
-    daily.set(key, (daily.get(key) ?? 0) + calculateFinancials(order).profit);
+    const realizedDate = realizedDateForView(order, viewMode);
+    if (!isRealizedForView(order, viewMode) || !realizedDate) continue;
+    const key = dateKey(realizedDate);
+    daily.set(key, (daily.get(key) ?? 0) + orderProfitForView(order, viewMode));
   }
 
   const entries = Array.from(daily.entries()).sort(([a], [b]) => a.localeCompare(b));
@@ -2468,7 +2919,7 @@ function CheckField({ name, label, defaultChecked }: { name: string; label: stri
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-line/70 py-2 text-sm last:border-0">
       <span className="text-muted">{label}</span>
@@ -2498,19 +2949,24 @@ function SummaryFacts({ summary }: { summary: ReturnType<typeof summarize> }) {
   );
 }
 
-function summarize(orders: OrderWithRelations[]) {
+function summarize(orders: OrderWithRelations[], viewMode: WorkflowViewMode = "personal") {
   return orders.reduce(
     (acc, order) => {
       const financials = calculateFinancials(order);
+      const payout = calculatePayoutBreakdown(order);
       acc.totalOrders += 1;
-      if (!order.profitReceived) acc.openOrders += 1;
+      if (!isOrderDoneForView(order, viewMode)) acc.openOrders += 1;
       acc.totalSpent += financials.totalPaid;
-      acc.totalPayout += financials.totalPayout;
-      acc.totalCashback += financials.totalCashback;
-      acc.amountOwed += financials.amountOwed;
-      if (order.creditCardPaid) acc.realizedProfit += financials.profit;
-      if (!order.creditCardPaid && !order.profitReceived) acc.unrealizedProfit += financials.profit;
-      if (order.paidOut && !order.creditCardPaid) acc.unpaidCard += financials.amountOwed;
+      acc.totalPayout += viewMode === "admin" ? payout.warehouseTotalPayout : financials.totalPayout;
+      acc.totalCashback += viewMode === "admin" ? 0 : financials.totalCashback;
+      acc.amountOwed += viewMode === "admin" ? order.memberPayoutAmount ?? payout.memberTotalPayout : financials.amountOwed;
+      if (isRealizedForView(order, viewMode)) acc.realizedProfit += orderProfitForView(order, viewMode);
+      if (isUnrealizedForView(order, viewMode)) acc.unrealizedProfit += orderProfitForView(order, viewMode);
+      if (viewMode === "admin") {
+        if (!(order.adminPaidMember || order.memberPaid)) acc.unpaidCard += order.memberPayoutAmount ?? payout.memberTotalPayout;
+      } else if ((viewMode === "member" ? order.memberConfirmedPayment : order.paidOut) && !isOrderDoneForView(order, viewMode)) {
+        acc.unpaidCard += financials.amountOwed;
+      }
       if ((order.trackingNumber && !order.trackingSubmitted) || (order.delivered && !order.paidOut) || (order.paidOut && !order.creditCardPaid)) acc.needsAction += 1;
       return acc;
     },
@@ -2518,12 +2974,12 @@ function summarize(orders: OrderWithRelations[]) {
   );
 }
 
-function groupProfit(orders: OrderWithRelations[], keyer: (order: OrderWithRelations) => string, mode: "realized" | "unrealized") {
+function groupProfit(orders: OrderWithRelations[], keyer: (order: OrderWithRelations) => string, mode: "realized" | "unrealized", viewMode: WorkflowViewMode = "personal") {
   const map = new Map<string, number>();
   for (const order of orders) {
-    if (mode === "realized" && !order.creditCardPaid) continue;
-    if (mode === "unrealized" && (order.creditCardPaid || order.profitReceived)) continue;
-    map.set(keyer(order), (map.get(keyer(order)) ?? 0) + calculateFinancials(order).profit);
+    if (mode === "realized" && !isRealizedForView(order, viewMode)) continue;
+    if (mode === "unrealized" && !isUnrealizedForView(order, viewMode)) continue;
+    map.set(keyer(order), (map.get(keyer(order)) ?? 0) + orderProfitForView(order, viewMode));
   }
   return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
 }
