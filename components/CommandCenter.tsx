@@ -758,33 +758,64 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
     { label: "Waiting Scan", value: orders.filter((order) => (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.scanned)).length.toString(), featured: false },
     { label: "Members To Pay", value: orders.filter((order) => (order.adminReceivedPayoutFromWarehouse || order.paidOut) && !(order.adminPaidMember || order.memberPaid)).length.toString(), featured: false }
   ];
+  const memberFinancials = orders.reduce(
+    (acc, order) => {
+      const financials = calculateFinancials(order);
+      const done = isMemberDone(order);
+      const paymentConfirmed = order.memberConfirmedPayment || done;
+
+      acc.totalSpent += financials.totalPaid;
+      acc.totalCashback += financials.totalCashback;
+      if (!(order.adminPaidMember || order.memberPaid)) acc.amountOwedToMe += order.memberPayoutAmount ?? financials.amountOwed;
+      if (!done) acc.creditOwed += financials.totalPaid;
+      if (paymentConfirmed) acc.realizedProfit += financials.profit;
+      else acc.unrealizedProfit += financials.profit;
+
+      return acc;
+    },
+    { totalSpent: 0, totalCashback: 0, amountOwedToMe: 0, creditOwed: 0, realizedProfit: 0, unrealizedProfit: 0 }
+  );
+  const memberMetricCount = (stage: StageFilter) => orders.filter((order) => matchesMemberStage(order, stage)).length.toString();
   const memberMetrics = [
     { label: "My Open Orders", value: totals.openOrders.toString(), featured: true },
-    { label: "Amount Owed To Me", value: money(totals.amountOwed), featured: true },
-    { label: "Ordered / Tracking Needed", value: orders.filter((order) => !order.trackingNumber).length.toString(), featured: false },
-    { label: "Tracking Sent to Admin", value: orders.filter((order) => order.memberSubmittedTrackingToAdmin || order.trackingNumber).length.toString(), featured: false },
-    { label: "Delivered", value: orders.filter((order) => order.memberMarkedDelivered || order.delivered).length.toString(), featured: false },
-    { label: "Payment Sent", value: orders.filter((order) => (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment).length.toString(), featured: false },
-    { label: "Payment Confirmed / Credit Owed", value: orders.filter((order) => order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived)).length.toString(), featured: false }
+    { label: "Total Spent", value: money(memberFinancials.totalSpent), featured: true },
+    { label: "Total Cashback", value: money(memberFinancials.totalCashback), featured: true },
+    { label: "Realized Profit", value: money(memberFinancials.realizedProfit), featured: true },
+    { label: "Unrealized Profit", value: money(memberFinancials.unrealizedProfit), featured: true },
+    { label: "Amount Owed To Me", value: money(memberFinancials.amountOwedToMe), featured: true },
+    { label: "Credit Owed", value: money(memberFinancials.creditOwed), featured: true },
+    { label: "Ordered / Tracking Needed", value: memberMetricCount("ORDERED"), featured: false },
+    { label: "Tracking Sent To Admin", value: memberMetricCount("MEMBER_TRACKING_SENT"), featured: false },
+    { label: "Delivered", value: memberMetricCount("DELIVERED"), featured: false },
+    { label: "Awaiting Payment", value: memberMetricCount("MEMBER_AWAITING_PAYMENT"), featured: false },
+    { label: "Payment Confirmed / Credit Owed", value: memberMetricCount("MEMBER_PAYMENT_CONFIRMED"), featured: false },
+    { label: "Done", value: memberMetricCount("MEMBER_DONE"), featured: false }
   ];
   const metrics = viewMode === "admin" ? adminMetrics : viewMode === "personal" ? personalMetrics : memberMetrics;
   const dashboardQueues = viewMode === "admin" ? adminStages.slice(1) : viewMode === "personal" ? personalStages.slice(1) : memberStages.slice(1);
+  const isMemberDashboard = viewMode === "member";
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
       <section>
-        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6 2xl:grid-cols-8">
+        <div className={cls("mb-4 grid gap-3", isMemberDashboard ? "grid-cols-[repeat(auto-fit,minmax(178px,1fr))] 2xl:grid-cols-4" : "sm:grid-cols-2 xl:grid-cols-6 2xl:grid-cols-8")}>
           {metrics.map((metric) => (
             <div
               key={metric.label}
               className={cls(
                 "rounded-lg border shadow-glow",
                 metricTone(metric.label),
-                metric.featured ? "min-h-32 p-5 sm:col-span-2 xl:col-span-2" : "min-h-24 p-3 xl:col-span-2 2xl:col-span-1"
+                isMemberDashboard
+                  ? metric.featured
+                    ? "min-h-32 p-4"
+                    : "min-h-28 p-3"
+                  : metric.featured
+                    ? "min-h-32 p-5 sm:col-span-2 xl:col-span-2"
+                    : "min-h-24 p-3 xl:col-span-2 2xl:col-span-1"
               )}
             >
-              <div className={cls("text-xs font-medium uppercase tracking-[.12em]", metric.featured ? "text-slate-300" : "text-muted")}>{metric.label}</div>
-              <div className={cls("mt-3 max-w-full break-words font-semibold leading-none text-white [overflow-wrap:anywhere]", metric.featured ? "text-[clamp(1.85rem,3vw,2.5rem)]" : "text-[clamp(1.25rem,1.8vw,1.75rem)]")}>{metric.value}</div>
+              <div className={cls("max-w-full whitespace-normal break-words font-medium uppercase leading-snug tracking-[.12em]", isMemberDashboard ? "text-[11px]" : "text-xs", metric.featured ? "text-slate-300" : "text-muted")}>{metric.label}</div>
+              <div className={cls("mt-3 max-w-full break-words font-semibold leading-none text-white [overflow-wrap:anywhere]", metric.featured ? "text-[clamp(1.65rem,2.6vw,2.35rem)]" : "text-[clamp(1.25rem,1.8vw,1.75rem)]")}>{metric.value}</div>
               {metric.featured && <div className="mt-3 h-1 w-16 rounded-full bg-gradient-to-r from-blue-400 to-green-400" />}
             </div>
           ))}
