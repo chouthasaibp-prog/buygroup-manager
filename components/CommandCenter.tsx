@@ -511,8 +511,8 @@ function CalculationLink({ value, breakdown, className }: { value: string; break
 
 function CalculationModal({ breakdown, onClose }: { breakdown: CalculationBreakdown; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-md rounded-xl border border-cyan/20 bg-surface p-5 shadow-neon" onClick={(event) => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={onClose}>
+      <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-xl border border-cyan/20 bg-surface p-4 shadow-neon sm:max-w-md sm:rounded-xl sm:p-5" onClick={(event) => event.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-white">Calculation Breakdown</h2>
@@ -917,8 +917,13 @@ export default function CommandCenter({ orders, archivedOrders, creditCardOrders
   const [memberFilter, setMemberFilter] = useState("ALL");
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<OrderWithRelations | null>(null);
   const inboxCount = visibleReminders.length + trackingChangeAlerts.length + deliveryBeforeTrackingAlerts.length;
+  const selectSection = (key: string) => {
+    setSection(key);
+    setMobileNavOpen(false);
+  };
 
   const filteredOrders = useMemo(() => {
     const q = query.toLowerCase();
@@ -955,80 +960,103 @@ export default function CommandCenter({ orders, archivedOrders, creditCardOrders
     return result;
   }, [orders, viewMode]);
 
+  const navContent = (
+    <>
+      <div className="mb-7 flex items-center gap-3 px-2">
+        <div className="grid h-9 w-9 place-items-center rounded-lg border border-cyan/30 bg-cyan/10 text-cyan shadow-neon">
+          <Home size={18} />
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-white">Buy Group Ops</div>
+          <div className="max-w-40 truncate text-xs text-cyan/80">{userEmail}</div>
+        </div>
+      </div>
+      <nav className="space-y-1">
+        <select
+          value={activeWorkspace.id}
+          onChange={(event) => {
+            window.location.href = `/?workspace=${event.target.value}`;
+          }}
+          className="mb-4 w-full px-3 py-2 text-sm"
+          aria-label="Workspace"
+        >
+          {workspaces.map((workspace) => (
+            <option key={workspace.id} value={workspace.id}>
+              {workspace.type === "PERSONAL" ? "Personal" : workspace.name} · {workspace.role}
+            </option>
+          ))}
+        </select>
+        {workspaceNav.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.key}
+              onClick={() => selectSection(item.key)}
+              className={cls(
+                "flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition",
+                section === item.key ? "border border-cyan/30 bg-cyan/10 text-cyan shadow-neon" : "text-muted hover:bg-white/5 hover:text-white"
+              )}
+            >
+              <Icon size={17} />
+              <span className="min-w-0 truncate">{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+    </>
+  );
+
   return (
     <main className="min-h-screen text-slate-100">
-      <aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-cyan/20 bg-surface/80 px-4 py-5 shadow-neon backdrop-blur-xl lg:block">
-        <div className="mb-7 flex items-center gap-3 px-2">
-          <div className="grid h-9 w-9 place-items-center rounded-lg border border-cyan/30 bg-cyan/10 text-cyan shadow-neon">
-            <Home size={18} />
-          </div>
-          <div>
-            <div className="text-sm font-semibold text-white">Buy Group Ops</div>
-            <div className="max-w-40 truncate text-xs text-cyan/80">{userEmail}</div>
-          </div>
-        </div>
-        <nav className="space-y-1">
-          <select
-            value={activeWorkspace.id}
-            onChange={(event) => {
-              window.location.href = `/?workspace=${event.target.value}`;
-            }}
-            className="mb-4 w-full px-3 py-2 text-sm"
-            aria-label="Workspace"
-          >
-            {workspaces.map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.type === "PERSONAL" ? "Personal" : workspace.name} · {workspace.role}
-              </option>
-            ))}
-          </select>
-          {workspaceNav.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.key}
-                onClick={() => setSection(item.key)}
-                className={cls(
-                  "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition",
-                  section === item.key ? "border border-cyan/30 bg-cyan/10 text-cyan shadow-neon" : "text-muted hover:bg-white/5 hover:text-white"
-                )}
-              >
-                <Icon size={17} />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
+      <aside className="fixed left-0 top-0 hidden h-screen w-64 overflow-y-auto border-r border-cyan/20 bg-surface/80 px-4 py-5 shadow-neon backdrop-blur-xl lg:block">
+        {navContent}
       </aside>
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm lg:hidden" onClick={() => setMobileNavOpen(false)}>
+          <aside className="h-full w-[min(86vw,20rem)] overflow-y-auto border-r border-cyan/20 bg-surface px-4 py-5 shadow-neon" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4 flex justify-end">
+              <button onClick={() => setMobileNavOpen(false)} className="grid min-h-11 min-w-11 place-items-center rounded-lg border border-line text-muted hover:text-white" title="Close menu">
+                <X size={18} />
+              </button>
+            </div>
+            {navContent}
+          </aside>
+        </div>
+      )}
 
       <section className="min-h-screen bg-surface/35 lg:pl-64">
-        <header className="sticky top-0 z-20 flex items-center justify-between border-b border-cyan/20 bg-surface/80 px-4 py-3 shadow-[0_12px_40px_rgba(0,0,0,.22)] backdrop-blur-xl md:px-7">
-          <div>
+        <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-cyan/20 bg-surface/80 px-3 py-3 shadow-[0_12px_40px_rgba(0,0,0,.22)] backdrop-blur-xl sm:px-4 md:px-7">
+          <div className="flex min-w-0 items-center gap-2">
+            <button onClick={() => setMobileNavOpen(true)} className="grid min-h-11 min-w-11 place-items-center rounded-lg border border-cyan/30 bg-cyan/10 text-cyan lg:hidden" title="Open menu">
+              <Menu size={18} />
+            </button>
+            <div className="min-w-0">
             <div className="text-xs uppercase tracking-[.18em] text-cyan/80">{activeWorkspace.type === "PERSONAL" ? "Personal Mode" : `${activeWorkspace.role} Mode`}</div>
-            <h1 className="text-xl font-semibold text-white">What needs action?</h1>
+              <h1 className="truncate text-lg font-semibold text-white sm:text-xl">What needs action?</h1>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
             {section !== "dashboard" && (
-              <button onClick={() => setInboxOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-blue-300/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-100 hover:bg-blue-500/20" title="Open inbox">
+              <button onClick={() => setInboxOpen(true)} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-blue-300/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-100 hover:bg-blue-500/20" title="Open inbox">
                 <Inbox size={16} />
-                Inbox
+                <span className="hidden min-[380px]:inline">Inbox</span>
                 {inboxCount > 0 && <span className="rounded-md bg-blue-400/20 px-1.5 py-0.5 text-[11px] text-blue-50">{inboxCount}</span>}
               </button>
             )}
             <form action={signOut}>
-              <button className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white" title="Log out">
+              <button className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white" title="Log out">
                 <LogOut size={16} />
-                Logout
+                <span className="hidden sm:inline">Logout</span>
               </button>
             </form>
-            <button onClick={() => setNewOrderOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon hover:bg-cyan/30">
+            <button onClick={() => setNewOrderOpen(true)} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon hover:bg-cyan/30">
               <Plus size={17} />
-              New Order
+              <span className="hidden min-[380px]:inline">New Order</span>
             </button>
           </div>
         </header>
 
-        <div className="px-4 py-5 md:px-7">
+        <div className="min-w-0 px-3 py-4 sm:px-4 md:px-7">
           {section === "dashboard" && <Dashboard orders={orders} buyGroups={buyGroups} reminders={visibleReminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} totals={totals} setSection={setSection} setStage={setStage} setSelectedOrder={setSelectedOrder} activeWorkspace={activeWorkspace} viewMode={viewMode} />}
           {section === "orders" && (
             <OrdersView
@@ -1669,13 +1697,13 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
   return (
     <section>
       <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex flex-wrap gap-2">
+        <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
           {workflowTabs.map((item) => (
             <button
               key={item.key}
               onClick={() => setStage(item.key)}
               className={cls(
-                "rounded-lg border px-3 py-2 text-sm",
+                "shrink-0 rounded-lg border px-3 py-2 text-sm sm:shrink",
                 stage === item.key
                   ? item.key === "ALL" ? "border-cyan/40 bg-cyan/20 text-cyan shadow-neon" : stageTone[stageToneKey(item.key)]
                   : "border-line bg-panel/80 text-muted hover:border-cyan/30 hover:text-white"
@@ -1686,7 +1714,7 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
             </button>
           ))}
         </div>
-        <div className="xl:min-w-[900px]">
+        <div className="min-w-0 xl:min-w-[900px]">
           <FilterBar query={query} setQuery={setQuery} accountFilter={accountFilter} setAccountFilter={setAccountFilter} buyGroupFilter={buyGroupFilter} setBuyGroupFilter={setBuyGroupFilter} warehouseFilter={warehouseFilter} setWarehouseFilter={setWarehouseFilter} memberFilter={memberFilter} setMemberFilter={setMemberFilter} accounts={accounts} buyGroups={buyGroups} warehouses={warehouses} workspaceMembers={workspaceMembers} showMemberFilter={isAdmin} />
         </div>
       </div>
@@ -1705,7 +1733,7 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
               }
               setTimeout(() => setSelectedOrderIds(new Set()), 100);
             }}
-            className="flex flex-wrap items-center gap-2"
+            className="flex w-full flex-wrap items-center gap-2 sm:w-auto"
           >
             <input type="hidden" name="workspaceId" value={workspaceId} />
             {Array.from(selectedOrderIds).map((id) => <input key={id} type="hidden" name="orderIds" value={id} />)}
@@ -1872,7 +1900,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
   };
 
   return (
-    <article className={cls("rounded-lg border bg-panel/80 p-4 shadow-glow transition hover:-translate-y-0.5 hover:shadow-neon", stageTone[order.currentStage], order.youngAdultBalanceUsed && "ring-1 ring-fuchsia-300/25")}>
+    <article className={cls("min-w-0 rounded-lg border bg-panel/80 p-3 shadow-glow transition hover:-translate-y-0.5 hover:shadow-neon sm:p-4", stageTone[order.currentStage], order.youngAdultBalanceUsed && "ring-1 ring-fuchsia-300/25")}>
       <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between">
         {onSelect && (
           <label className="flex items-center gap-2 self-start rounded-md border border-white/10 bg-black/20 px-2.5 py-1.5 text-xs text-muted">
@@ -1892,9 +1920,9 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
           }}
           className="min-w-0 cursor-pointer text-left xl:flex-1"
         >
-          <div className="flex items-center gap-2">
-            <h3 className="truncate font-semibold">{order.itemName}</h3>
-            <span className={cls("rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{viewMode === "personal" ? personalWorkflowLabel(order) : memberSafe ? memberWorkflowLabel(order) : adminWorkflowLabel(order)}</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <h3 className="min-w-0 max-w-full break-words font-semibold sm:truncate">{order.itemName}</h3>
+            <span className={cls("max-w-full rounded-md border px-2 py-1 text-xs", stageTone[order.currentStage])}>{viewMode === "personal" ? personalWorkflowLabel(order) : memberSafe ? memberWorkflowLabel(order) : adminWorkflowLabel(order)}</span>
             <YoungAdultBalanceBadge order={order} />
           </div>
           {viewMode === "admin" && order.submittedBy && <div className="mt-1 text-xs text-muted">Submitted by <span className="text-white">{memberName(order)}</span> · {order.submittedBy.email}</div>}
@@ -1929,7 +1957,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
 function OrderCardAlerts({ order, alerts, onOpen, viewMode }: { order: OrderWithRelations; alerts: OrderCardAlert[]; onOpen: () => void; viewMode: WorkflowViewMode }) {
   return (
     <div className="w-full xl:order-3">
-      <div className="mt-1 grid gap-1.5 lg:grid-cols-2 2xl:grid-cols-3">
+      <div className="mt-1 grid gap-1.5 sm:grid-cols-2 2xl:grid-cols-3">
         {alerts.map((alert) => (
           <div
             key={alert.id}
@@ -1942,7 +1970,7 @@ function OrderCardAlerts({ order, alerts, onOpen, viewMode }: { order: OrderWith
               <AlertTriangle size={12} />
               {alertBadgeLabel(alert.priority)}
             </span>
-            <span className="min-w-0 flex-1 truncate font-medium">{alert.label}</span>
+            <span className="min-w-[9rem] flex-1 break-words font-medium sm:truncate">{alert.label}</span>
             {alert.detail && <span className="truncate text-muted">{alert.detail}</span>}
             {alert.action === "commitWarehouse" ? (
               <form action={quickAction}>
@@ -2039,14 +2067,14 @@ function StageActions({ order, onOpen, isAdmin, viewMode }: { order: OrderWithRe
   const needsAdminCommit = viewMode === "admin" && isAdmin && !(order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt);
   if (needsPersonalCommit || needsAdminCommit) {
     return (
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end xl:w-auto">
         <form action={quickAction}>
           <input type="hidden" name="id" value={order.id} />
           <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
           <input type="hidden" name="action" value="commitWarehouse" />
-          <button className="rounded-lg border border-red-300/45 bg-red-500/15 px-3 py-2 text-sm font-medium text-red-100 shadow-neon">Mark Committed to Warehouse</button>
+          <button className="min-h-11 rounded-lg border border-red-300/45 bg-red-500/15 px-3 py-2 text-sm font-medium text-red-100 shadow-neon">Mark Committed to Warehouse</button>
         </form>
-        <button onClick={onOpen} className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Open</button>
+        <button onClick={onOpen} className="min-h-11 rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Open</button>
       </div>
     );
   }
@@ -2073,9 +2101,9 @@ function StageActions({ order, onOpen, isAdmin, viewMode }: { order: OrderWithRe
       order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived) ? "memberDone" : "");
 
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2">
+    <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end xl:w-auto">
       {order.trackingNumber && (
-        <button type="button" onClick={() => navigator.clipboard?.writeText(order.trackingNumber ?? "")} className="rounded-lg border border-line p-2 text-muted hover:text-white" title="Copy tracking number">
+        <button type="button" onClick={() => navigator.clipboard?.writeText(order.trackingNumber ?? "")} className="grid min-h-11 min-w-11 place-items-center rounded-lg border border-line p-2 text-muted hover:text-white" title="Copy tracking number">
           <Copy size={16} />
         </button>
       )}
@@ -2084,7 +2112,7 @@ function StageActions({ order, onOpen, isAdmin, viewMode }: { order: OrderWithRe
           <input type="hidden" name="id" value={order.id} />
           <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
           <input type="hidden" name="action" value={action} />
-          <button className="rounded-lg border border-green-400/40 bg-green-500/15 px-3 py-2 text-sm font-medium text-green-100 shadow-neon">{actionButtonLabel(action, viewMode)}</button>
+          <button className="min-h-11 rounded-lg border border-green-400/40 bg-green-500/15 px-3 py-2 text-sm font-medium text-green-100 shadow-neon">{actionButtonLabel(action, viewMode)}</button>
         </form>
       )}
       {isAdmin && viewMode === "admin" && (order.memberMarkedDelivered || order.delivered) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut) && (
@@ -2093,10 +2121,10 @@ function StageActions({ order, onOpen, isAdmin, viewMode }: { order: OrderWithRe
           <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
           <input type="hidden" name="action" value="snoozePayout" />
           <input type="hidden" name="days" value="3" />
-          <button className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Snooze</button>
+          <button className="min-h-11 rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Snooze</button>
         </form>
       )}
-      <button onClick={onOpen} className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Open</button>
+      <button onClick={onOpen} className="min-h-11 rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Open</button>
     </div>
   );
 }
@@ -2119,9 +2147,9 @@ function SubmitTrackingForm({ order, viewMode }: { order: OrderWithRelations; vi
           setShowClientError(true);
         }
       }}
-      className="min-w-72"
+      className="w-full sm:min-w-72"
     >
-      <div className="flex items-start gap-2">
+      <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-start">
         <input type="hidden" name="id" value={order.id} />
         <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
         <div className="min-w-0 flex-1">
@@ -2139,7 +2167,7 @@ function SubmitTrackingForm({ order, viewMode }: { order: OrderWithRelations; vi
           />
           {showError && <div id={`tracking-error-${order.id}`} className="mt-1 text-xs text-red-200">{errorMessage}</div>}
         </div>
-        <button className="rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon">{viewMode === "personal" ? "Submit Tracking" : "Submit Tracking To Admin"}</button>
+        <button className="min-h-11 rounded-lg border border-cyan/40 bg-cyan/20 px-3 py-2 text-sm font-medium text-cyan shadow-neon">{viewMode === "personal" ? "Submit Tracking" : "Submit Tracking To Admin"}</button>
       </div>
     </form>
   );
@@ -3591,11 +3619,11 @@ function SettingsView({ profile, activeWorkspace, workspaces, notificationSettin
 
 function Modal({ title, children, onClose, wide = false }: { title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 backdrop-blur">
-      <div className={cls("max-h-[92vh] w-full overflow-auto rounded-xl border border-line bg-panel p-5 shadow-glow", wide ? "max-w-6xl" : "max-w-3xl")}>
-        <div className="mb-5 flex items-center justify-between gap-4">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <button onClick={onClose} className="rounded-lg border border-line px-3 py-1.5 text-sm text-muted hover:text-white">Close</button>
+    <div className="fixed inset-0 z-50 grid place-items-end bg-black/60 p-0 backdrop-blur sm:place-items-center sm:p-3">
+      <div className={cls("max-h-[100dvh] w-full overflow-auto rounded-t-xl border border-line bg-panel p-4 shadow-glow sm:max-h-[92vh] sm:rounded-xl sm:p-5", wide ? "sm:max-w-6xl" : "sm:max-w-3xl")}>
+        <div className="sticky -top-4 z-10 mb-5 flex items-center justify-between gap-4 border-b border-line/70 bg-panel/95 pb-3 pt-1 backdrop-blur sm:static sm:border-0 sm:bg-transparent sm:pb-0 sm:pt-0">
+          <h2 className="min-w-0 truncate text-lg font-semibold">{title}</h2>
+          <button onClick={onClose} className="min-h-11 rounded-lg border border-line px-3 py-1.5 text-sm text-muted hover:text-white">Close</button>
         </div>
         {children}
       </div>

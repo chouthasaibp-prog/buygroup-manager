@@ -23,6 +23,7 @@ body {
   background-size: auto, auto, 42px 42px, 42px 42px, auto;
   color: #f4f7fb;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 body::before {
@@ -99,4 +100,17 @@ button:hover {
 
 ::selection {
   background: rgba(77, 163, 255, .35);
+}
+
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  button {
+    min-height: 44px;
+  }
 }
