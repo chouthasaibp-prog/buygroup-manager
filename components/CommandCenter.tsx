@@ -238,10 +238,9 @@ function YoungAdultBalanceBadge({ order }: { order: OrderWithRelations }) {
 
 function cashbackNameForCard(card: Pick<CreditCardModel, "name" | "issuer"> | NonNullable<OrderWithRelations["creditCard"]> | null | undefined, fallback = "Cashback") {
   if (!card) return fallback;
-  const combined = `${card.issuer ?? ""} ${card.name}`.toLowerCase();
-  if (combined.includes("chase")) return "Chase";
-  if (card.name.length > 32) return "Card";
-  return card.name;
+  const issuer = card.issuer?.trim();
+  if (issuer) return issuer;
+  return card.name.trim() || fallback;
 }
 
 function cashbackLabelForOrder(order: OrderWithRelations, suffix = "cashback") {

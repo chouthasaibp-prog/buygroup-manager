@@ -16,6 +16,14 @@ type SendNotificationInput = {
   channels?: Channel[];
 };
 
+type NotificationStyle = {
+  color: string;
+  badgeBg: string;
+  badgeText: string;
+  icon: string;
+  label: string;
+};
+
 type MemberWithProfile = WorkspaceMember & { profile: Profile; workspace: Workspace };
 type OrderForNotifications = OrderWithRelations & { workspace: Workspace | null };
 
@@ -29,7 +37,79 @@ const reminderIncludes = {
   reminderStates: true
 } as const;
 
-async function sendEmail(to: string, title: string, message: string) {
+function styleForNotification(type: string): NotificationStyle {
+  if (type === "commit_warehouse") return { color: "#f59e0b", badgeBg: "#451a03", badgeText: "#fde68a", icon: "📦", label: "Needs Commit" };
+  if (type === "submit_tracking") return { color: "#3b82f6", badgeBg: "#172554", badgeText: "#bfdbfe", icon: "🚚", label: "Tracking Needed" };
+  if (type === "check_delivery" || type === "check_scan") return { color: type === "check_scan" ? "#8b5cf6" : "#3b82f6", badgeBg: type === "check_scan" ? "#2e1065" : "#172554", badgeText: type === "check_scan" ? "#ddd6fe" : "#bfdbfe", icon: type === "check_scan" ? "📬" : "🚚", label: type === "check_scan" ? "Waiting Scan" : "Delivery Check" };
+  if (type === "check_payout") return { color: "#14b8a6", badgeBg: "#042f2e", badgeText: "#99f6e4", icon: "💰", label: "Waiting Payout" };
+  if (type === "pay_credit_card") return { color: "#ef4444", badgeBg: "#450a0a", badgeText: "#fecaca", icon: "💳", label: "Payment Needed" };
+  if (type === "done" || type === "completed") return { color: "#22c55e", badgeBg: "#052e16", badgeText: "#bbf7d0", icon: "✅", label: "Done" };
+  return { color: "#64748b", badgeBg: "#0f172a", badgeText: "#cbd5e1", icon: "•", label: "Action" };
+}
+
+function actionTitle(title: string) {
+  return title.split(" — ")[0].split(": ")[0] || title;
+}
+
+function parseMessageFields(message: string) {
+  return message.split("\n").map((line) => {
+    const index = line.indexOf(":");
+    if (index === -1) return null;
+    return {
+      label: line.slice(0, index).trim(),
+      value: line.slice(index + 1).trim()
+    };
+  }).filter((field): field is { label: string; value: string } => !!field && field.value.length > 0);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function notificationHtml(title: string, message: string, style: NotificationStyle) {
+  const fields = parseMessageFields(message);
+  const action = fields.find((field) => field.label.toLowerCase() === "action needed");
+  const timestamps = fields.filter((field) => ["ordered", "created", "tracking submitted", "delivered", "scanned", "payout received", "last workflow update", "relevant date"].includes(field.label.toLowerCase()));
+  const detailFields = fields.filter((field) => field !== action && !timestamps.includes(field));
+  const rows = detailFields.map((field) => `
+    <tr>
+      <td style="padding:9px 12px;color:#94a3b8;font-size:13px;border-bottom:1px solid #1f2937;">${escapeHtml(field.label)}</td>
+      <td style="padding:9px 12px;color:#f8fafc;font-size:13px;font-weight:600;text-align:right;border-bottom:1px solid #1f2937;">${escapeHtml(field.value)}</td>
+    </tr>
+  `).join("");
+  const timestampRows = timestamps.map((field) => `
+    <div style="display:flex;justify-content:space-between;gap:16px;padding:7px 0;border-bottom:1px solid #1f2937;">
+      <span style="color:#94a3b8;">${escapeHtml(field.label)}</span>
+      <span style="color:#e2e8f0;font-weight:600;text-align:right;">${escapeHtml(field.value)}</span>
+    </div>
+  `).join("");
+
+  return `<!doctype html>
+  <html>
+    <body style="margin:0;background:#020617;padding:24px;font-family:Inter,Arial,sans-serif;color:#f8fafc;">
+      <div style="max-width:640px;margin:0 auto;border:1px solid #1e293b;border-left:6px solid ${style.color};border-radius:14px;background:#0f172a;overflow:hidden;">
+        <div style="padding:22px 24px;border-bottom:1px solid #1e293b;background:#111827;">
+          <div style="display:inline-block;border-radius:999px;background:${style.badgeBg};color:${style.badgeText};padding:6px 10px;font-size:12px;font-weight:700;letter-spacing:.04em;">${style.icon} ${escapeHtml(style.label)}</div>
+          <h1 style="margin:14px 0 0;color:#ffffff;font-size:22px;line-height:1.25;">${style.icon} ${escapeHtml(actionTitle(title))}</h1>
+        </div>
+        <div style="padding:20px 24px;">
+          <table style="width:100%;border-collapse:collapse;border:1px solid #1f2937;border-radius:10px;overflow:hidden;">${rows}</table>
+          ${action ? `<div style="margin-top:18px;border-radius:10px;background:#111827;border:1px solid ${style.color};padding:14px 16px;">
+            <div style="color:${style.badgeText};font-size:12px;text-transform:uppercase;font-weight:700;letter-spacing:.08em;">Action needed</div>
+            <div style="margin-top:6px;color:#ffffff;font-size:15px;font-weight:700;">${escapeHtml(action.value)}</div>
+          </div>` : ""}
+          ${timestampRows ? `<div style="margin-top:18px;border-radius:10px;background:#020617;border:1px solid #1f2937;padding:12px 16px;font-size:13px;">${timestampRows}</div>` : ""}
+        </div>
+      </div>
+    </body>
+  </html>`;
+}
+
+async function sendEmail(to: string, title: string, message: string, style: NotificationStyle) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.NOTIFICATION_FROM_EMAIL;
   if (!apiKey || !from) return;
@@ -44,7 +124,8 @@ async function sendEmail(to: string, title: string, message: string) {
       from,
       to,
       subject: title,
-      text: message
+      text: message,
+      html: notificationHtml(title, message, style)
     })
   });
 
@@ -56,12 +137,43 @@ async function sendEmail(to: string, title: string, message: string) {
 async function sendSlack(input: SendNotificationInput, context: { orderName?: string; workspaceName?: string }) {
   const url = process.env.SLACK_WEBHOOK_URL;
   if (!url) return;
+  const style = styleForNotification(input.type);
+  const fields = parseMessageFields(input.message);
+  const slackFields = fields.map((field) => ({
+    type: "mrkdwn",
+    text: `*${field.label}:*\n${field.value}`
+  }));
+  const detailBlocks = slackFields.length > 0
+    ? [
+        { type: "section", fields: slackFields.slice(0, 10) },
+        ...(slackFields.length > 10 ? [{ type: "section", fields: slackFields.slice(10, 20) }] : [])
+      ]
+    : [{ type: "section", text: { type: "mrkdwn", text: input.message } }];
 
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      text: `*Action needed: ${input.title}*\nWorkspace: ${context.workspaceName ?? input.workspaceId}\n${input.message}`
+      text: `${style.icon} Action needed: ${actionTitle(input.title)}`,
+      attachments: [
+        {
+          color: style.color,
+          blocks: [
+            {
+              type: "header",
+              text: { type: "plain_text", text: `${style.icon} Action needed: ${actionTitle(input.title)}`, emoji: true }
+            },
+            {
+              type: "context",
+              elements: [
+                { type: "mrkdwn", text: `*Workspace:* ${context.workspaceName ?? input.workspaceId}` }
+              ]
+            },
+            { type: "divider" },
+            ...detailBlocks
+          ]
+        }
+      ]
     })
   });
 
@@ -82,7 +194,7 @@ export async function sendNotification(input: SendNotificationInput) {
 
   if (channels.includes("email")) {
     try {
-      await sendEmail(profile.email, input.title, input.message);
+      await sendEmail(profile.email, input.title, input.message, styleForNotification(input.type));
     } catch (error) {
       console.error("Email notification failed", error);
     }
@@ -132,14 +244,14 @@ function relevantDateFor(reminder: Reminder, mode: "personal" | "member" | "admi
 
 function reminderSubject(reminder: Reminder, mode: "personal" | "member" | "admin" = "personal") {
   const item = reminder.order.itemName;
-  if (reminder.type === "commit_warehouse" && mode === "admin") return `Urgent: commit member order to warehouse: ${item}`;
-  if (reminder.type === "commit_warehouse") return `Commit item to warehouse: ${item}`;
-  if (reminder.type === "submit_tracking") return `Tracking needed: ${item}`;
-  if (reminder.type === "check_delivery") return `Delivery check: ${item}`;
-  if (reminder.type === "check_scan") return `Scan check: ${item}`;
-  if (reminder.type === "check_payout") return `Payout check: ${item}`;
-  if (reminder.type === "pay_credit_card") return `Pay credit card: ${item}`;
-  return `${reminder.label}: ${item}`;
+  if (reminder.type === "commit_warehouse" && mode === "admin") return `Urgent: commit member order to warehouse — ${item}`;
+  if (reminder.type === "commit_warehouse") return `Commit item to warehouse — ${item}`;
+  if (reminder.type === "submit_tracking") return `Check Amazon for tracking — ${item}`;
+  if (reminder.type === "check_delivery") return `Check if item delivered — ${item}`;
+  if (reminder.type === "check_scan") return `Item delivered — waiting for scan — ${item}`;
+  if (reminder.type === "check_payout") return `Item scanned — waiting for payout — ${item}`;
+  if (reminder.type === "pay_credit_card") return `Warehouse payout received — Pay off card — ${item}`;
+  return `${reminder.label} — ${item}`;
 }
 
 function reminderMessage(reminder: Reminder, mode: "personal" | "member" | "admin") {
@@ -162,6 +274,7 @@ function reminderMessage(reminder: Reminder, mode: "personal" | "member" | "admi
       `Amazon account: ${order.amazonAccount?.name ?? "Not selected"}`,
       `Order #: ${order.orderNumber ?? "Not provided"}`,
       `Created: ${dateTime(order.createdAt)}`,
+      `Last workflow update: Created — ${dateTime(order.createdAt)}`,
       "Action needed: Commit this member order to the warehouse/buy group"
     ].join("\n");
   }
@@ -174,13 +287,11 @@ function reminderMessage(reminder: Reminder, mode: "personal" | "member" | "admi
     `Buy group: ${destinationName(order)}`,
     `Order #: ${order.orderNumber ?? "Not provided"}`,
     `Tracking: ${order.trackingNumber ?? "Not submitted"}`,
+    `Credit card: ${order.creditCard?.name ?? "Not selected"}`,
     `Ordered: ${dateTime(order.createdAt)}`,
-    `${dateLabel}: ${relevantDate ? dateTime(relevantDate) : "Not set"}`
+    `Last workflow update: ${dateLabel} — ${relevantDate ? dateTime(relevantDate) : "Not set"}`
   ];
 
-  if (reminder.type === "pay_credit_card" || order.creditCard) {
-    lines.push(`Credit card: ${order.creditCard?.name ?? "Not selected"}`);
-  }
   if (reminder.type === "pay_credit_card") {
     lines.splice(1, 0, `Credit owed: ${money(financials.amountOwed)}`);
   }
