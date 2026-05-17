@@ -1,4 +1,5 @@
 import { signIn, signUp } from "./actions";
+import PasswordInput from "./PasswordInput";
 
 type Props = {
   searchParams: Promise<{
@@ -31,7 +32,7 @@ export default async function LoginPage({ searchParams }: Props) {
           </label>
           <label className="block">
             <span className="mb-1 block text-xs text-muted">Password</span>
-            <input name="password" type="password" required minLength={6} className="w-full px-3 py-2 text-sm" />
+            <PasswordInput name="password" required minLength={6} className="px-3 py-2 text-sm" autoComplete="current-password" />
           </label>
           <button className="w-full rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Sign In</button>
         </form>
@@ -59,7 +60,7 @@ export default async function LoginPage({ searchParams }: Props) {
           </label>
           <label className="block">
             <span className="mb-1 block text-xs text-muted">Password</span>
-            <input name="password" type="password" required minLength={6} className="w-full px-3 py-2 text-sm" />
+            <PasswordInput name="password" required minLength={6} className="px-3 py-2 text-sm" autoComplete="new-password" />
           </label>
           <button className="w-full rounded-lg border border-cyan/40 bg-cyan/15 px-3 py-2 text-sm font-medium text-cyan">Create Account</button>
         </form>
