@@ -147,7 +147,7 @@ export function dateTime(date: Date | string | null | undefined) {
 
 export type Reminder = {
   id: string;
-  type: "submit_tracking" | "check_payout" | "pay_credit_card" | "confirm_profit" | "missing_info" | "missing_amazon_account" | "missing_buy_group";
+  type: "commit_warehouse" | "submit_tracking" | "check_delivery" | "check_scan" | "check_payout" | "pay_credit_card" | "confirm_profit" | "missing_info" | "missing_amazon_account" | "missing_buy_group";
   label: string;
   dueDate: Date;
   order: OrderWithRelations;
@@ -183,6 +183,65 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date(), v
   for (const order of orders) {
     const missingAccountRequested = !!order.reminderStates?.find((item) => item.type === "missing_amazon_account");
     const missingBuyGroupRequested = !!order.reminderStates?.find((item) => item.type === "missing_buy_group");
+    const done = viewMode === "admin"
+      ? order.adminPaidMember || order.memberPaid || order.profitReceived
+      : viewMode === "member"
+        ? order.memberMarkedDone || order.profitReceived
+        : order.profitReceived;
+
+    if (done) continue;
+
+    if (viewMode === "personal") {
+      if (!reminderHidden(order, "commit_warehouse", now)) {
+        reminders.push({
+          id: `${order.id}:commit-warehouse`,
+          type: "commit_warehouse",
+          label: "Commit item to warehouse",
+          dueDate: order.createdAt,
+          order,
+          severity: severityFor(order.createdAt),
+          action: "Commit item to warehouse"
+        });
+      }
+
+      if (!(order.trackingSubmitted || order.trackingNumber) && !reminderHidden(order, "submit_tracking", now)) {
+        reminders.push({
+          id: `${order.id}:tracking-check`,
+          type: "submit_tracking",
+          label: "Check Amazon for tracking number",
+          dueDate: order.createdAt,
+          order,
+          severity: severityFor(order.createdAt),
+          action: "Check Amazon for tracking number"
+        });
+      }
+
+      if ((order.trackingSubmitted || order.trackingNumber) && !order.delivered && !reminderHidden(order, "check_delivery", now)) {
+        const dueDate = order.trackingSubmittedAt ?? order.trackingAddedAt ?? order.updatedAt;
+        reminders.push({
+          id: `${order.id}:delivery-check`,
+          type: "check_delivery",
+          label: "Check if item has been delivered",
+          dueDate,
+          order,
+          severity: severityFor(dueDate),
+          action: "Check if item has been delivered"
+        });
+      }
+
+      if (order.delivered && !order.scanned && !reminderHidden(order, "check_scan", now)) {
+        const dueDate = order.deliveredAt ?? order.updatedAt;
+        reminders.push({
+          id: `${order.id}:scan-check`,
+          type: "check_scan",
+          label: "Check if warehouse scanned item",
+          dueDate,
+          order,
+          severity: severityFor(dueDate),
+          action: "Check if warehouse scanned item"
+        });
+      }
+    }
 
     if (!order.amazonAccount && viewMode === "admin" && !reminderHidden(order, "missing_amazon_account", now)) {
       reminders.push({
@@ -262,18 +321,13 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date(), v
       });
     }
 
-    const done = viewMode === "admin"
-      ? order.adminPaidMember || order.memberPaid || order.profitReceived
-      : viewMode === "member"
-        ? order.memberMarkedDone || order.profitReceived
-        : order.profitReceived;
     const trackingSubmittedForWorkflow = viewMode === "admin"
       ? order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted
       : viewMode === "member"
         ? !!order.trackingNumber
       : order.trackingSubmitted;
 
-    if (!done && !trackingSubmittedForWorkflow && !reminderHidden(order, "submit_tracking", now)) {
+    if (viewMode !== "personal" && !trackingSubmittedForWorkflow && !reminderHidden(order, "submit_tracking", now)) {
       const dueDate = order.trackingNumber ? order.trackingAddedAt ?? now : addDays(order.createdAt, 1);
       reminders.push({
         id: `${order.id}:tracking`,
@@ -286,17 +340,19 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date(), v
       });
     }
 
-    if (viewMode !== "member" && !done && (order.memberMarkedDelivered || order.delivered) && (order.adminMarkedScannedByWarehouse || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut) && !reminderHidden(order, "check_payout", now)) {
-      const baseDueDate = addDays(order.memberMarkedDeliveredAt ?? order.deliveredAt ?? order.updatedAt, 2);
+    if (viewMode !== "member" && (order.memberMarkedDelivered || order.delivered) && (order.adminMarkedScannedByWarehouse || order.scanned) && !(order.adminReceivedPayoutFromWarehouse || order.paidOut) && !reminderHidden(order, "check_payout", now)) {
+      const baseDueDate = viewMode === "personal"
+        ? order.scannedAt ?? order.adminMarkedScannedByWarehouseAt ?? order.updatedAt
+        : addDays(order.memberMarkedDeliveredAt ?? order.deliveredAt ?? order.updatedAt, 2);
       const dueDate = order.payoutReminderSnoozedAt && order.payoutReminderSnoozedAt > baseDueDate ? order.payoutReminderSnoozedAt : baseDueDate;
       reminders.push({
         id: `${order.id}:payout`,
         type: "check_payout",
-        label: "Check payout",
+        label: viewMode === "personal" ? "Check if warehouse paid out" : "Check payout",
         dueDate,
         order,
         severity: severityFor(dueDate),
-        action: "Mark paid out"
+        action: viewMode === "personal" ? "Check if warehouse paid out" : "Mark paid out"
       });
     }
 
@@ -306,21 +362,23 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date(), v
         ? order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived)
         : order.paidOut && !order.creditCardPaid;
 
-    if (!done && paymentReminderActive && !reminderHidden(order, "pay_credit_card", now)) {
+    if (paymentReminderActive && !reminderHidden(order, "pay_credit_card", now)) {
       const dueDate =
-        order.manualCreditCardDueDate ??
-        addDays(
-          viewMode === "member" ? order.memberConfirmedPaymentAt ?? order.updatedAt : order.adminReceivedPayoutFromWarehouseAt ?? order.paidOutAt ?? order.updatedAt,
-          order.amazonAccount?.defaultCreditCardDueDays ?? 7
-        );
+        viewMode === "personal"
+          ? order.paidOutAt ?? order.updatedAt
+          : order.manualCreditCardDueDate ??
+            addDays(
+              viewMode === "member" ? order.memberConfirmedPaymentAt ?? order.updatedAt : order.adminReceivedPayoutFromWarehouseAt ?? order.paidOutAt ?? order.updatedAt,
+              order.amazonAccount?.defaultCreditCardDueDays ?? 7
+            );
       reminders.push({
         id: `${order.id}:card`,
         type: "pay_credit_card",
-        label: viewMode === "admin" ? "Pay member" : "Credit/card payment due",
+        label: viewMode === "admin" ? "Pay member" : viewMode === "personal" ? "Pay off credit card" : "Credit/card payment due",
         dueDate,
         order,
         severity: severityFor(dueDate),
-        action: viewMode === "admin" ? "Mark paid to member" : viewMode === "member" ? "Mark done after paying card" : "Mark card paid"
+        action: viewMode === "admin" ? "Mark paid to member" : viewMode === "member" ? "Mark done after paying card" : "Pay off credit card"
       });
     }
 

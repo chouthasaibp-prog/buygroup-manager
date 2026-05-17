@@ -232,6 +232,25 @@ function YoungAdultBalanceBadge({ order }: { order: OrderWithRelations }) {
   );
 }
 
+function cashbackNameForCard(card: Pick<CreditCardModel, "name" | "issuer"> | NonNullable<OrderWithRelations["creditCard"]> | null | undefined, fallback = "Cashback") {
+  if (!card) return fallback;
+  const combined = `${card.issuer ?? ""} ${card.name}`.toLowerCase();
+  if (combined.includes("chase")) return "Chase";
+  if (card.name.length > 32) return "Card";
+  return card.name;
+}
+
+function cashbackLabelForOrder(order: OrderWithRelations, suffix = "cashback") {
+  if (!order.creditCard) return "Cashback";
+  const name = cashbackNameForCard(order.creditCard, "Card");
+  return `${name} ${suffix}`;
+}
+
+function mainProfitCashbackLabel(order: OrderWithRelations) {
+  if (!order.creditCard) return "Cashback + Payout Difference";
+  return `${cashbackNameForCard(order.creditCard, "Card")} Cashback + Payout Difference`;
+}
+
 function isMoneyBreakdownLabel(label: string) {
   const normalized = label.toLowerCase();
   return normalized.includes("credit")
@@ -262,6 +281,8 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
   const displayPayoutDifference = displayPayout - financials.totalPaid;
   const displayMainProfit = order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + displayPayoutDifference;
   const displayProfit = displayMainProfit + financials.youngAdultProfit;
+  const cardCashbackLabel = cashbackLabelForOrder(order);
+  const mainProfitLabel = mainProfitCashbackLabel(order);
   const note = order.youngAdultBalanceUsed ? "Paid with YA Balance: no new cashback/profit/credit owed counted." : undefined;
 
   if (viewMode === "admin" && (normalized.includes("spread") || normalized.includes("warehouse") || normalized.includes("member payout") || normalized.includes("owed to member") || normalized.includes("payout owed"))) {
@@ -322,13 +343,13 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
         { label: "Retail total", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
         { label: viewMode === "member" ? "Member payout" : "Payout", value: money(displayPayout) },
         { label: "Payout difference", value: `${money(displayPayout)} - ${money(financials.totalPaid)} = ${money(displayPayoutDifference)}` },
-        { label: "Chase cashback", value: money(financials.chaseCashback) },
-        { label: "Chase Cashback + Payout Difference", value: money(displayMainProfit) },
+        { label: cardCashbackLabel, value: money(financials.chaseCashback) },
+        { label: mainProfitLabel, value: money(displayMainProfit) },
         { label: "Young Adult Cashback Profit", value: money(financials.youngAdultProfit) },
         { label: "Credit owed", value: money(financials.amountOwed), muted: true },
         { label: "Profit status", value: order.creditCardPaid || order.memberConfirmedPayment || order.profitReceived ? "Realized" : "Unrealized" }
       ],
-      formula: "Total Profit = Chase Cashback + Payout Difference + Young Adult Cashback Profit",
+      formula: "Total Profit = Card Cashback + Payout Difference + Young Adult Cashback Profit",
       finalLabel: "Total profit",
       finalValue: money(value ?? displayProfit),
       note
@@ -342,11 +363,11 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
         { label: "Retail per unit", value: money(order.retailPrice) },
         { label: "Quantity", value: String(order.quantity) },
         { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
-        { label: "Chase cashback rate", value: order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%` },
-        { label: "Chase cashback", value: money(financials.chaseCashback) },
+        { label: `${cardCashbackLabel} rate`, value: order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%` },
+        { label: cardCashbackLabel, value: money(financials.chaseCashback) },
         { label: "Young Adult cashback", value: money(financials.youngAdultCashback) }
       ],
-      formula: "Total cashback = Chase cashback + Young Adult cashback",
+      formula: "Total cashback = card cashback + Young Adult cashback",
       finalLabel: "Final cashback",
       finalValue: money(value ?? financials.totalCashback),
       note
@@ -373,12 +394,12 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
       { label: "Retail per unit", value: money(order.retailPrice) },
       { label: "Quantity", value: String(order.quantity) },
       { label: "Retail total", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
-      { label: "Chase cashback", value: money(financials.chaseCashback) },
+      { label: cardCashbackLabel, value: money(financials.chaseCashback) },
       { label: "Young Adult Cashback Profit", value: money(financials.youngAdultProfit) },
       ...(order.youngAdultBalanceUsed ? [{ label: "Used YA balance adjustment", value: `-${money(financials.youngAdultBalanceApplied)}` }] : []),
       ...(viewMode === "member" ? [{ label: "Amount paid by admin / member payout", value: money(memberPayout) }] : [])
     ],
-    formula: order.youngAdultBalanceUsed ? "Credit owed = 0 because payment used previously earned YA balance" : "Credit owed = total retail - Chase cashback",
+    formula: order.youngAdultBalanceUsed ? "Credit owed = 0 because payment used previously earned YA balance" : "Credit owed = total retail - card cashback",
     finalLabel: "Final credit owed",
     finalValue: money(value ?? financials.amountOwed),
     note: note ?? "Young Adult cashback is profit only, not a credit reduction."
@@ -419,7 +440,7 @@ function aggregateBreakdown(label: string, orders: OrderWithRelations[], viewMod
   }
 
   const totalPaid = rows.reduce((sum, row) => sum + row.financials.totalPaid, 0);
-  const cashback = rows.reduce((sum, row) => sum + row.financials.chaseCashback, 0);
+  const cardCashback = rows.reduce((sum, row) => sum + row.financials.chaseCashback, 0);
   const yaCashback = rows.reduce((sum, row) => sum + row.financials.youngAdultCashback, 0);
   const creditOwed = rows.reduce((sum, row) => sum + row.financials.amountOwed, 0);
   const payout = rows.reduce((sum, row) => sum + (viewMode === "member" ? row.order.memberPayoutAmount ?? row.payout.memberTotalPayout : row.financials.totalPayout), 0);
@@ -433,13 +454,13 @@ function aggregateBreakdown(label: string, orders: OrderWithRelations[], viewMod
       { label: "Retail total", value: money(totalPaid) },
       ...(normalized.includes("profit") ? [{ label: viewMode === "member" ? "Member payout" : "Payout", value: money(payout) }] : []),
       ...(normalized.includes("profit") ? [{ label: "Payout difference", value: money(payoutDifference) }] : []),
-      { label: "Chase cashback", value: money(cashback) },
-      ...(normalized.includes("profit") ? [{ label: "Chase Cashback + Payout Difference", value: money(mainProfit) }] : []),
+      { label: "Card cashback", value: money(cardCashback) },
+      ...(normalized.includes("profit") ? [{ label: "Card Cashback + Payout Difference", value: money(mainProfit) }] : []),
       { label: "Young Adult Cashback Profit", value: money(yaCashback) },
       ...(yaBalance > 0 ? [{ label: "Used YA balance adjustment", value: `-${money(yaBalance)}` }] : []),
       ...(normalized.includes("profit") || normalized.includes("credit") || normalized.includes("owed") ? [{ label: "Credit owed", value: money(creditOwed), muted: normalized.includes("profit") }] : [])
     ],
-    formula: normalized.includes("profit") ? "Total Profit = Chase Cashback + Payout Difference + Young Adult Cashback Profit" : normalized.includes("cashback") ? "Total cashback = Chase cashback + Young Adult cashback" : normalized.includes("total spent") ? "Total spent = sum of retail per unit x quantity" : normalized.includes("payout") || normalized.includes("owed to me") ? "Member payout = sum of member payout amounts" : "Credit owed = total retail - Chase cashback",
+    formula: normalized.includes("profit") ? "Total Profit = Card Cashback + Payout Difference + Young Adult Cashback Profit" : normalized.includes("cashback") ? "Total cashback = card cashback + Young Adult cashback" : normalized.includes("total spent") ? "Total spent = sum of retail per unit x quantity" : normalized.includes("payout") || normalized.includes("owed to me") ? "Member payout = sum of member payout amounts" : "Credit owed = total retail - card cashback",
     finalLabel: label,
     finalValue,
     note: yaBalance > 0 ? "Paid with YA Balance: no new cashback/profit/credit owed counted." : normalized.includes("credit") || normalized.includes("owed") ? "Young Adult cashback is profit only, not a credit reduction." : undefined
@@ -1647,7 +1668,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Status", personalWorkflowLabel(order)],
     ["Card", order.creditCard?.name ?? "Not selected"],
     ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
-    ["Chase Cashback", money(financials.chaseCashback)],
+    [cashbackLabelForOrder(order), money(financials.chaseCashback)],
     ["Net Credit Owed", money(financials.amountOwed)],
     ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
     ["Tracking", order.trackingNumber ?? "Missing"],
@@ -1673,7 +1694,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Status", memberWorkflowLabel(order)],
     ["Card", order.creditCard?.name ?? "Not selected"],
     ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
-    ["Chase Cashback", money(financials.chaseCashback)],
+    [cashbackLabelForOrder(order), money(financials.chaseCashback)],
     ["Net Credit Owed", money(financials.amountOwed)],
     ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
     ["Tracking", order.trackingNumber ?? "Missing"],
@@ -1704,9 +1725,9 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       ["Retail", money(order.retailPrice)],
       [viewMode === "admin" ? "Warehouse Payout" : "Member Payout", money(viewMode === "admin" ? payout.warehousePayoutPerUnit : payout.memberPayoutPerUnit)],
       ...(viewMode === "admin" ? [["Member Payout", money(payout.memberPayoutPerUnit)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
-      ["Chase Cashback", order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%`],
+      [cashbackLabelForOrder(order), order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%`],
       ...(viewMode !== "admin" ? [["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)], ["Net Credit Owed", money(financials.amountOwed)]] as Array<[string, string]> : []),
-      ["Chase Cashback + Payout Difference", money(displayMainProfit)],
+      [mainProfitCashbackLabel(order), money(displayMainProfit)],
       ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
       ["Total Profit", money(displayTotalProfit)],
       ["Created", shortDate(order.createdAt)]
@@ -2137,8 +2158,8 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
               ["Total Paid", money(financials.totalPaid)],
               ["Payout", money(financials.totalPayout)],
               ["Payout Difference", money(financials.payoutDifference)],
-              ["Chase Cashback", money(financials.chaseCashback)],
-              ["Chase Cashback + Payout Difference", money(financials.mainProfit)],
+              [cashbackLabelForOrder(order), money(financials.chaseCashback)],
+              [mainProfitCashbackLabel(order), money(financials.mainProfit)],
               ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
               ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Amount Owed", money(financials.amountOwed)],
@@ -2157,8 +2178,8 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
               ["Member payout", money(order.memberPayoutAmount ?? payout.memberTotalPayout)],
               ["Total Paid", money(financials.totalPaid)],
               ["Payout Difference", money((order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid)],
-              ["Chase Cashback", money(financials.chaseCashback)],
-              ["Chase Cashback + Payout Difference", money(order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + (order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid)],
+              [cashbackLabelForOrder(order), money(financials.chaseCashback)],
+              [mainProfitCashbackLabel(order), money(order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + (order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid)],
               ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
               ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Credit / Amount Owed", money(financials.amountOwed)],
@@ -2211,9 +2232,12 @@ function OrderFields({ accounts, creditCards, buyGroups, order, lockTracking = f
   const payout = order ? calculatePayoutBreakdown(order) : null;
   const initialCardId = order?.creditCardId ?? "";
   const [selectedCreditCardId, setSelectedCreditCardId] = useState(initialCardId);
-  const selectedCard = creditCards.find((card) => card.id === selectedCreditCardId) ?? order?.creditCard ?? null;
+  const selectedCard = creditCards.find((card) => card.id === selectedCreditCardId) ?? (selectedCreditCardId && selectedCreditCardId === initialCardId ? order?.creditCard : null);
   const cashbackOptions = cashbackOptionsForCard(selectedCard);
-  const cashbackDefault = order?.chaseCashbackPercent ?? selectedCard?.defaultCashbackPercent ?? 5;
+  const cashbackDefault = order && selectedCreditCardId === initialCardId ? order.chaseCashbackPercent : selectedCard?.defaultCashbackPercent ?? 5;
+  const cashbackBaseName = cashbackNameForCard(selectedCard);
+  const cashbackFieldLabel = selectedCard ? `${cashbackBaseName} cashback` : "Cashback";
+  const customCashbackFieldLabel = selectedCard ? `${cashbackBaseName} custom %` : "Custom %";
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -2252,13 +2276,13 @@ function OrderFields({ accounts, creditCards, buyGroups, order, lockTracking = f
       )}
       <Field label="Order number"><input name="orderNumber" defaultValue={order?.orderNumber ?? ""} placeholder="Ex: 114-3361283-3021808" inputMode="numeric" maxLength={19} pattern="\d{3}-\d{7}-\d{7}" title="Use the format 114-3361283-3021808" onInput={(event) => { event.currentTarget.value = formatAmazonOrderNumber(event.currentTarget.value); }} className="w-full px-3 py-2 text-sm" /></Field>
       <Field label="Tracking number"><input name="trackingNumber" defaultValue={order?.trackingNumber ?? ""} placeholder="Ex: TBA330706322941" disabled={lockTracking} onInput={(event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase(); }} className="w-full px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60" /></Field>
-      <Field label="Chase cashback">
+      <Field label={cashbackFieldLabel}>
         <select key={selectedCreditCardId || "no-card"} name="chaseCashbackPercent" defaultValue={cashbackOptions.includes(cashbackDefault) ? cashbackDefault : "custom"} className="w-full px-3 py-2 text-sm">
           {cashbackOptions.map((value) => <option key={value} value={value}>{value}%</option>)}
           <option value="custom">Custom</option>
         </select>
       </Field>
-      <Field label="Custom Chase %"><input name="customChaseCashbackPercent" type="number" min="0" step="0.01" defaultValue={cashbackOptions.includes(cashbackDefault) ? "" : cashbackDefault} placeholder="Only if custom" className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label={customCashbackFieldLabel}><input name="customChaseCashbackPercent" type="number" min="0" step="0.01" defaultValue={cashbackOptions.includes(cashbackDefault) ? "" : cashbackDefault} placeholder="Only if custom" className="w-full px-3 py-2 text-sm" /></Field>
       <Field label="Shipping type"><input name="shippingType" defaultValue={order?.shippingType ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
       <div className="grid gap-3 md:col-span-2 md:grid-cols-3">
         <CheckField name="youngAdultEligible" label="Young Adult extra 5% cashback" defaultChecked={order?.youngAdultEligible ?? false} />
@@ -2427,13 +2451,13 @@ function CreditCardsView({ creditCards, orders, workspaceId, viewMode }: { credi
           <h2 className="font-semibold">Add Credit Card</h2>
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <input name="name" required placeholder="Card name" className="w-full px-3 py-2 text-sm" />
-          <input name="issuer" placeholder="Issuer" className="w-full px-3 py-2 text-sm" />
-          <input name="last4" placeholder="Last 4" maxLength={4} inputMode="numeric" className="w-full px-3 py-2 text-sm" />
-          <input name="creditLimit" type="number" min="0" step="0.01" placeholder="Credit limit" className="w-full px-3 py-2 text-sm" />
-          <input name="utilizationWarningPercent" type="number" min="1" max="100" step="1" defaultValue={30} aria-label="Utilization warning percent" className="w-full px-3 py-2 text-sm" />
-          <input name="defaultCashbackPercent" type="number" min="0" step="0.01" defaultValue={5} aria-label="Default cashback percent" className="w-full px-3 py-2 text-sm" />
-          <input name="cashbackOptions" defaultValue="5, 6, 7" aria-label="Cashback options" className="w-full px-3 py-2 text-sm xl:col-span-2" />
+          <Field label="Card name"><input name="name" required placeholder="Card name" className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Issuer"><input name="issuer" placeholder="Issuer" className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Last 4"><input name="last4" placeholder="Last 4" maxLength={4} inputMode="numeric" className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Credit limit"><input name="creditLimit" type="number" min="0" step="0.01" placeholder="Credit limit" className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Credit utilization warning %"><input name="utilizationWarningPercent" type="number" min="1" max="100" step="1" defaultValue={30} className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Regular cashback %"><input name="defaultCashbackPercent" type="number" min="0" step="0.01" defaultValue={5} className="w-full px-3 py-2 text-sm" /></Field>
+          <Field label="Adjustable cashback options" wide><input name="cashbackOptions" defaultValue="5, 6, 7" placeholder="Example: 5, 6, 7" className="w-full px-3 py-2 text-sm" /></Field>
           <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Add Card</button>
         </div>
       </form>
@@ -2451,24 +2475,10 @@ function CreditCardsView({ creditCards, orders, workspaceId, viewMode }: { credi
               </button>
               <Fact label="Active/open gross credit" value={money(summary.activeGross)} />
               <Fact label="Active/open net credit owed" value={money(summary.activeNet)} />
-              <Fact label="Current Chase cashback" value={money(summary.currentCashback)} />
+              <Fact label="Current cashback earned" value={money(summary.currentCashback)} />
               <Fact label="Utilization" value={`${summary.utilization.toFixed(1)}%`} />
               <Fact label="Credit limit" value={money(card.creditLimit)} />
               <Fact label="Warning threshold" value={`${card.utilizationWarningPercent}%`} />
-              <form action={updateCreditCard} className="mt-4 grid gap-2">
-                <input type="hidden" name="workspaceId" value={workspaceId} />
-                <input type="hidden" name="id" value={card.id} />
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <input name="name" required defaultValue={card.name} className="w-full px-2 py-1.5 text-sm" />
-                  <input name="issuer" defaultValue={card.issuer ?? ""} placeholder="Issuer" className="w-full px-2 py-1.5 text-sm" />
-                  <input name="last4" defaultValue={card.last4 ?? ""} placeholder="Last 4" maxLength={4} className="w-full px-2 py-1.5 text-sm" />
-                  <input name="creditLimit" type="number" min="0" step="0.01" defaultValue={card.creditLimit} className="w-full px-2 py-1.5 text-sm" />
-                  <input name="utilizationWarningPercent" type="number" min="1" max="100" step="1" defaultValue={card.utilizationWarningPercent} className="w-full px-2 py-1.5 text-sm" />
-                  <input name="defaultCashbackPercent" type="number" min="0" step="0.01" defaultValue={card.defaultCashbackPercent} className="w-full px-2 py-1.5 text-sm" />
-                  <input name="cashbackOptions" defaultValue={cashbackOptionsForCard(card).join(", ")} className="w-full px-2 py-1.5 text-sm sm:col-span-2" />
-                </div>
-                <button className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-white">Save card</button>
-              </form>
             </div>
           );
         })}
@@ -2493,15 +2503,30 @@ function CreditCardDetailModal({ card, orders, viewMode, onClose }: { card: Cred
         <section className="rounded-lg border border-line bg-surface/60 p-4">
           <div className="mb-3 text-sm font-semibold">Card Summary</div>
           <Fact label="Historical total credit use" value={money(summary.historicalGross)} />
-          <Fact label="Historical Chase cashback earned" value={money(summary.historicalCashback)} />
+          <Fact label="Historical cashback earned" value={money(summary.historicalCashback)} />
           <Fact label="Active/open gross credit" value={money(summary.activeGross)} />
           <Fact label="Active/open net credit owed" value={money(summary.activeNet)} />
-          <Fact label="Current open Chase cashback earned" value={money(summary.currentCashback)} />
+          <Fact label="Current open cashback earned" value={money(summary.currentCashback)} />
           <Fact label="Credit limit" value={money(card.creditLimit)} />
           <Fact label="Utilization warning threshold" value={`${card.utilizationWarningPercent}%`} />
           <Fact label="Current utilization" value={`${summary.utilization.toFixed(1)}%`} />
         </section>
-        <section className="space-y-3">
+        <form action={updateCreditCard} className="rounded-lg border border-line bg-surface/60 p-4">
+          <input type="hidden" name="workspaceId" value={card.workspaceId ?? ""} />
+          <input type="hidden" name="id" value={card.id} />
+          <div className="mb-3 text-sm font-semibold">Edit Card</div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Card name"><input name="name" required defaultValue={card.name} className="w-full px-3 py-2 text-sm" /></Field>
+            <Field label="Issuer"><input name="issuer" defaultValue={card.issuer ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
+            <Field label="Last 4"><input name="last4" defaultValue={card.last4 ?? ""} maxLength={4} inputMode="numeric" className="w-full px-3 py-2 text-sm" /></Field>
+            <Field label="Credit limit"><input name="creditLimit" type="number" min="0" step="0.01" defaultValue={card.creditLimit} className="w-full px-3 py-2 text-sm" /></Field>
+            <Field label="Credit utilization warning %"><input name="utilizationWarningPercent" type="number" min="1" max="100" step="1" defaultValue={card.utilizationWarningPercent} className="w-full px-3 py-2 text-sm" /></Field>
+            <Field label="Regular cashback %"><input name="defaultCashbackPercent" type="number" min="0" step="0.01" defaultValue={card.defaultCashbackPercent} className="w-full px-3 py-2 text-sm" /></Field>
+            <Field label="Adjustable cashback options" wide><input name="cashbackOptions" defaultValue={cashbackOptionsForCard(card).join(", ")} placeholder="Example: 5, 6, 7" className="w-full px-3 py-2 text-sm" /></Field>
+          </div>
+          <button className="mt-3 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Save Card</button>
+        </form>
+        <section className="space-y-3 xl:col-span-2">
           <div>
             <div className="mb-2 text-sm font-semibold">Credit Utilization %</div>
             <MiniLineChart series={series} valueKey="utilization" formatValue={(value) => value.toFixed(1)} suffix="%" />
@@ -2955,7 +2980,7 @@ function AnalyticsView({ orders, viewMode }: { orders: OrderWithRelations[]; vie
 
 function ImportExportView({ orders }: { orders: OrderWithRelations[] }) {
   const csv = useMemo(() => {
-    const header = ["item", "quantity", "account", "buy_group_destination", "order_number", "tracking", "stage", "total_paid", "total_payout", "payout_difference", "chase_cashback", "main_profit", "young_adult_cashback_profit", "young_adult_balance_used", "credit_owed", "total_profit", "profit_status"];
+    const header = ["item", "quantity", "account", "buy_group_destination", "order_number", "tracking", "stage", "total_paid", "total_payout", "payout_difference", "card_cashback", "main_profit", "young_adult_cashback_profit", "young_adult_balance_used", "credit_owed", "total_profit", "profit_status"];
     const rows = orders.map((order) => {
       const financials = calculateFinancials(order);
       return [order.itemName, order.quantity, order.amazonAccount?.name ?? "", order.buyGroup?.name ?? order.warehouse?.name ?? "", order.orderNumber ?? "", order.trackingNumber ?? "", order.currentStage, financials.totalPaid, financials.totalPayout, financials.payoutDifference, financials.chaseCashback, financials.mainProfit, financials.youngAdultProfit, financials.youngAdultBalanceApplied, financials.amountOwed, financials.profit, order.creditCardPaid ? "realized" : "unrealized"];

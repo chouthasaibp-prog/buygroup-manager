@@ -1,6 +1,6 @@
 import type { Order, Profile, ReminderState, Workspace, WorkspaceMember } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { buildReminders, type OrderWithRelations, type Reminder } from "@/lib/domain";
+import { buildReminders, calculateFinancials, calculatePayoutBreakdown, dateTime, money, type OrderWithRelations, type Reminder } from "@/lib/domain";
 
 type Channel = "in-app" | "email" | "slack";
 type Severity = "info" | "warning" | "high";
@@ -21,6 +21,7 @@ type OrderForNotifications = OrderWithRelations & { workspace: Workspace | null 
 
 const reminderIncludes = {
   amazonAccount: true,
+  creditCard: true,
   buyGroup: true,
   warehouse: true,
   submittedBy: true,
@@ -60,7 +61,7 @@ async function sendSlack(input: SendNotificationInput, context: { orderName?: st
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      text: `*${input.title}*\nSeverity: ${input.severity}\nWorkspace: ${context.workspaceName ?? input.workspaceId}\nOrder: ${context.orderName ?? input.orderId ?? "N/A"}\nAction needed: ${input.message}`
+      text: `*Action needed: ${input.title}*\nWorkspace: ${context.workspaceName ?? input.workspaceId}\n${input.message}`
     })
   });
 
@@ -109,8 +110,64 @@ function severityFor(reminder: Reminder): Severity {
   return "info";
 }
 
-function reminderMessage(reminder: Reminder) {
-  return reminder.notes ? `${reminder.action}. ${reminder.notes}` : reminder.action;
+function destinationName(order: OrderWithRelations) {
+  return order.buyGroup?.name ?? order.warehouse?.name ?? order.warehouse?.code ?? "Not selected";
+}
+
+function payoutForReminder(order: OrderWithRelations, mode: "personal" | "member" | "admin") {
+  const payout = calculatePayoutBreakdown(order);
+  if (mode === "admin") return { perUnit: payout.warehousePayoutPerUnit, total: payout.warehouseTotalPayout };
+  if (mode === "member") return { perUnit: payout.memberPayoutPerUnit, total: order.memberPayoutAmount ?? payout.memberTotalPayout };
+  return { perUnit: order.payoutPerUnit, total: order.payoutPerUnit * order.quantity };
+}
+
+function relevantDateFor(reminder: Reminder, mode: "personal" | "member" | "admin") {
+  const order = reminder.order;
+  if (reminder.type === "check_delivery") return ["Tracking submitted", order.trackingSubmittedAt ?? order.trackingAddedAt];
+  if (reminder.type === "check_scan") return ["Delivered", order.deliveredAt ?? order.memberMarkedDeliveredAt];
+  if (reminder.type === "check_payout") return [mode === "admin" ? "Scanned by warehouse" : "Scanned", order.adminMarkedScannedByWarehouseAt ?? order.warehouseScannedAt ?? order.scannedAt];
+  if (reminder.type === "pay_credit_card") return [mode === "admin" ? "Warehouse payout received" : mode === "member" ? "Payment confirmed" : "Payout received", order.adminReceivedPayoutFromWarehouseAt ?? order.paidOutAt ?? order.memberConfirmedPaymentAt];
+  return ["Relevant date", null];
+}
+
+function reminderSubject(reminder: Reminder) {
+  const item = reminder.order.itemName;
+  if (reminder.type === "commit_warehouse") return `Commit item to warehouse: ${item}`;
+  if (reminder.type === "submit_tracking") return `Tracking needed: ${item}`;
+  if (reminder.type === "check_delivery") return `Delivery check: ${item}`;
+  if (reminder.type === "check_scan") return `Scan check: ${item}`;
+  if (reminder.type === "check_payout") return `Payout check: ${item}`;
+  if (reminder.type === "pay_credit_card") return `Pay credit card: ${item}`;
+  return `${reminder.label}: ${item}`;
+}
+
+function reminderMessage(reminder: Reminder, mode: "personal" | "member" | "admin") {
+  const order = reminder.order;
+  const financials = calculateFinancials(order);
+  const payout = payoutForReminder(order, mode);
+  const [dateLabel, relevantDate] = relevantDateFor(reminder, mode);
+  const lines = [
+    `Item: ${order.itemName}`,
+    `Quantity: ${order.quantity}`,
+    `Retail: ${money(financials.totalPaid)} total / ${money(order.retailPrice)} per unit`,
+    `Payout: ${money(payout.total)} total / ${money(payout.perUnit)} per unit`,
+    `Amazon account: ${order.amazonAccount?.name ?? "Not selected"}`,
+    `Buy group: ${destinationName(order)}`,
+    `Order #: ${order.orderNumber ?? "Not provided"}`,
+    `Tracking: ${order.trackingNumber ?? "Not submitted"}`,
+    `Ordered: ${dateTime(order.createdAt)}`,
+    `${dateLabel}: ${relevantDate ? dateTime(relevantDate) : "Not set"}`
+  ];
+
+  if (reminder.type === "pay_credit_card" || order.creditCard) {
+    lines.push(`Credit card: ${order.creditCard?.name ?? "Not selected"}`);
+  }
+  if (reminder.type === "pay_credit_card") {
+    lines.splice(1, 0, `Credit owed: ${money(financials.amountOwed)}`);
+  }
+  if (reminder.notes) lines.push(`Note: ${reminder.notes}`);
+
+  return lines.join("\n");
 }
 
 function isDoneForMode(order: OrderForNotifications, mode: "personal" | "member" | "admin") {
@@ -119,13 +176,26 @@ function isDoneForMode(order: OrderForNotifications, mode: "personal" | "member"
   return order.profitReceived;
 }
 
-async function shouldSendReminder(reminder: Reminder, recipient: WorkspaceMember, now: Date) {
+function reminderCadenceHours(reminder: Reminder, mode: "personal" | "member" | "admin") {
+  if (mode !== "personal") return null;
+  if (reminder.type === "commit_warehouse") return 0;
+  if (reminder.type === "submit_tracking") return 18;
+  if (reminder.type === "check_delivery") return 18;
+  if (reminder.type === "check_scan") return 12;
+  if (reminder.type === "check_payout") return 18;
+  if (reminder.type === "pay_credit_card") return 6;
+  return null;
+}
+
+async function shouldSendReminder(reminder: Reminder, recipient: WorkspaceMember, now: Date, mode: "personal" | "member" | "admin") {
   const state = reminder.order.reminderStates?.find((item) => item.type === reminder.type);
   if (state?.reviewedAt || state?.resolvedAt) return false;
   if (state?.snoozedUntil && state.snoozedUntil > now) return false;
-  if (state?.lastSentAt) return false;
   if (!recipient.reminderNotificationsEnabled) return false;
-  return true;
+  if (!state?.lastSentAt) return true;
+  const cadenceHours = reminderCadenceHours(reminder, mode);
+  if (!cadenceHours) return false;
+  return now.getTime() - state.lastSentAt.getTime() >= cadenceHours * 60 * 60 * 1000;
 }
 
 async function markReminderSent(reminder: Reminder, now: Date) {
@@ -146,6 +216,9 @@ async function resolveFixedReminderStates(order: OrderForNotifications) {
     order.amazonAccount ? "missing_amazon_account" : null,
     order.buyGroup || order.warehouse ? "missing_buy_group" : null,
     order.trackingNumber ? "submit_tracking" : null,
+    order.trackingSubmitted || order.trackingNumber ? "commit_warehouse" : null,
+    order.delivered ? "check_delivery" : null,
+    order.scanned ? "check_scan" : null,
     order.adminReceivedPayoutFromWarehouse || order.paidOut ? "check_payout" : null,
     order.adminPaidMember || order.memberPaid || order.creditCardPaid ? "pay_credit_card" : null
   ].filter((value): value is string => !!value);
@@ -164,14 +237,14 @@ async function notifyRemindersForRecipient(recipient: MemberWithProfile, orders:
   let sent = 0;
 
   for (const reminder of reminders) {
-    if (!(await shouldSendReminder(reminder, recipient, now))) continue;
+    if (!(await shouldSendReminder(reminder, recipient, now, mode))) continue;
     await sendNotification({
       userId: recipient.profileId,
       workspaceId: recipient.workspaceId,
       orderId: reminder.order.id,
       type: reminder.type,
-      title: reminder.label,
-      message: reminderMessage(reminder),
+      title: reminderSubject(reminder),
+      message: reminderMessage(reminder, mode),
       severity: severityFor(reminder),
       channels: channelsForMember(recipient)
     });
