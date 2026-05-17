@@ -1049,7 +1049,7 @@ export default function CommandCenter({ orders, accounts, creditCards, buyGroups
             />
           )}
           {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
-          {section === "creditCards" && <CreditCardsView creditCards={creditCards} orders={orders} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
+          {section === "creditCards" && <CreditCardsView creditCards={creditCards} orders={orders} workspaceId={activeWorkspace.id} viewMode={viewMode} setSelectedOrder={setSelectedOrder} />}
           {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
           {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
           {section === "queues" && (
@@ -2555,7 +2555,7 @@ function MiniLineChart({ series, valueKey, suffix = "", formatValue }: { series:
   );
 }
 
-function CreditCardsView({ creditCards, orders, workspaceId, viewMode }: { creditCards: CreditCardModel[]; orders: OrderWithRelations[]; workspaceId: string; viewMode: WorkflowViewMode }) {
+function CreditCardsView({ creditCards, orders, workspaceId, viewMode, setSelectedOrder }: { creditCards: CreditCardModel[]; orders: OrderWithRelations[]; workspaceId: string; viewMode: WorkflowViewMode; setSelectedOrder: (order: OrderWithRelations) => void }) {
   const [selectedCard, setSelectedCard] = useState<CreditCardModel | null>(null);
 
   if (viewMode === "admin") {
@@ -2604,13 +2604,14 @@ function CreditCardsView({ creditCards, orders, workspaceId, viewMode }: { credi
         })}
         {creditCards.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-muted">No credit cards yet.</div>}
       </SummaryGrid>
-      {selectedCard && <CreditCardDetailModal card={selectedCard} orders={orders.filter((order) => order.creditCardId === selectedCard.id)} viewMode={viewMode} onClose={() => setSelectedCard(null)} />}
+      {selectedCard && <CreditCardDetailModal card={selectedCard} orders={orders.filter((order) => order.creditCardId === selectedCard.id)} viewMode={viewMode} setSelectedOrder={setSelectedOrder} onClose={() => setSelectedCard(null)} />}
     </div>
   );
 }
 
-function CreditCardDetailModal({ card, orders, viewMode, onClose }: { card: CreditCardModel; orders: OrderWithRelations[]; viewMode: WorkflowViewMode; onClose: () => void }) {
+function CreditCardDetailModal({ card, orders, viewMode, setSelectedOrder, onClose }: { card: CreditCardModel; orders: OrderWithRelations[]; viewMode: WorkflowViewMode; setSelectedOrder: (order: OrderWithRelations) => void; onClose: () => void }) {
   const summary = cardSummary(card, orders, viewMode);
+  const currentOrders = summary.activeOrders.map((order) => ({ order, financials: calculateFinancials(order) }));
   const payments = orders
     .map((order) => ({ order, paidAt: orderCardPaidAt(order, viewMode), financials: calculateFinancials(order) }))
     .filter((row) => row.paidAt)
@@ -2654,6 +2655,42 @@ function CreditCardDetailModal({ card, orders, viewMode, onClose }: { card: Cred
           <div>
             <div className="mb-2 text-sm font-semibold">Active/Open Gross Credit</div>
             <MiniLineChart series={series} valueKey="gross" formatValue={(value) => money(value)} />
+          </div>
+        </section>
+        <section className="xl:col-span-2">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold">Current Orders Using This Card</div>
+            <div className="text-xs text-muted">{currentOrders.length} open {currentOrders.length === 1 ? "order" : "orders"}</div>
+          </div>
+          <div className="space-y-2">
+            {currentOrders.map(({ order, financials }) => (
+              <div key={order.id} className="grid gap-2 rounded-lg border border-line bg-surface/60 p-3 text-sm xl:grid-cols-[1.25fr_repeat(8,minmax(100px,.65fr))_auto] xl:items-center">
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-white">{order.itemName}</div>
+                  <div className="mt-0.5 text-xs text-muted">{viewMode === "personal" ? personalWorkflowLabel(order) : memberWorkflowLabel(order)}</div>
+                </div>
+                <Fact label="Amazon" value={order.amazonAccount?.name ?? "Missing"} />
+                <Fact label="Buy group" value={order.buyGroup?.name ?? order.warehouse?.name ?? "Missing"} />
+                <Fact label="Order #" value={order.orderNumber ?? "Missing"} />
+                <Fact label="Tracking" value={order.trackingNumber ?? "Not submitted"} />
+                <Fact label="Gross credit" value={orderCalculationValue(order, "Total paid", money(financials.totalPaid), viewMode)} />
+                <Fact label="Card cashback" value={orderCalculationValue(order, "Cashback", money(financials.chaseCashback), viewMode)} />
+                <Fact label="Net credit owed" value={orderCalculationValue(order, "Credit owed", money(financials.amountOwed), viewMode)} />
+                <Fact label="Payout" value={payoutReceivedForView(order, viewMode) ? "Received" : "Waiting"} />
+                <Fact label="Ordered" value={shortDate(order.createdAt)} />
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    setSelectedOrder(order);
+                  }}
+                  className="rounded-md border border-cyan/30 bg-cyan/10 px-2.5 py-1.5 text-xs font-medium text-cyan hover:bg-cyan/20"
+                >
+                  Open order
+                </button>
+              </div>
+            ))}
+            {currentOrders.length === 0 && <div className="rounded-lg border border-dashed border-line p-5 text-sm text-muted">No active orders using this card.</div>}
           </div>
         </section>
         <section className="xl:col-span-2">
