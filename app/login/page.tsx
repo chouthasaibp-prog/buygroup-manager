@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { signIn, signUp } from "./actions";
 import PasswordInput from "./PasswordInput";
 
@@ -34,6 +35,9 @@ export default async function LoginPage({ searchParams }: Props) {
             <span className="mb-1 block text-xs text-muted">Password</span>
             <PasswordInput name="password" required minLength={6} className="px-3 py-2 text-sm" autoComplete="current-password" />
           </label>
+          <div className="text-right text-sm">
+            <Link href="/forgot-password" className="text-cyan hover:text-white">Forgot password?</Link>
+          </div>
           <button className="w-full rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Sign In</button>
         </form>
 
