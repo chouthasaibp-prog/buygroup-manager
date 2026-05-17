@@ -375,7 +375,7 @@ async function resolveFixedReminderStates(order: OrderForNotifications) {
 }
 
 async function notifyRemindersForRecipient(recipient: MemberWithProfile, orders: OrderForNotifications[], mode: "personal" | "member" | "admin", now: Date, force = false) {
-  const activeOrders = orders.filter((order) => !isDoneForMode(order, mode));
+  const activeOrders = orders.filter((order) => !order.deletedAt && !order.archivedAt && !isDoneForMode(order, mode));
   await Promise.all(orders.map(resolveFixedReminderStates));
   const reminders = buildReminders(activeOrders, now, mode);
   let sent = 0;
@@ -411,6 +411,8 @@ export async function runReminderNotificationCron(now = new Date(), options: { f
     const orders = await prisma.order.findMany({
       where: {
         workspaceId: membership.workspaceId,
+        deletedAt: null,
+        archivedAt: null,
         ...(mode === "member" ? { submittedByProfileId: membership.profileId } : {})
       },
       include: reminderIncludes
@@ -445,7 +447,7 @@ export async function sendImmediatePersonalWorkflowNotifications({
       include: reminderIncludes
     })
   ]);
-  if (!recipient || !order || order.workspace?.type !== "PERSONAL" || isDoneForMode(order as OrderForNotifications, "personal")) return 0;
+  if (!recipient || !order || order.deletedAt || order.archivedAt || order.workspace?.type !== "PERSONAL" || isDoneForMode(order as OrderForNotifications, "personal")) return 0;
 
   const reminders = buildReminders([order as OrderForNotifications], now, "personal").filter((reminder) => types.includes(reminder.type));
   let sent = 0;
@@ -491,7 +493,7 @@ export async function sendImmediateAdminCommitNotifications({
       include: reminderIncludes
     })
   ]);
-  if (!order || order.workspace?.type !== "OPERATOR" || isDoneForMode(order as OrderForNotifications, "admin")) return 0;
+  if (!order || order.deletedAt || order.archivedAt || order.workspace?.type !== "OPERATOR" || isDoneForMode(order as OrderForNotifications, "admin")) return 0;
   const reminders = buildReminders([order as OrderForNotifications], now, "admin").filter((reminder) => reminder.type === "commit_warehouse");
   if (reminders.length === 0) return 0;
   let sent = 0;

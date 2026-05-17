@@ -214,6 +214,9 @@ model Order {
   notes                              String?
   manualCreditCardDueDate            DateTime?
   payoutReminderSnoozedAt            DateTime?
+  archivedAt                         DateTime?
+  deletedAt                          DateTime?
+  deletedByUserId                    String?
   createdAt                          DateTime       @default(now())
   trackingAddedAt                    DateTime?
   committedToWarehouseAt             DateTime?

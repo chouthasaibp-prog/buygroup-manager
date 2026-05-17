@@ -2,13 +2,15 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, CreditCard as CreditCardModel, DeliveryBeforeTrackingAlert, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
-import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard as CreditCardIcon, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, MoreHorizontal, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createCreditCard, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, requestMissingOrderInfo, reviewDeliveryBeforeTrackingAlert, reviewReminder, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, snoozeReminder, snoozeTrackingChangeAlert, updateCreditCard, updateNotificationSettings, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
+import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard as CreditCardIcon, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, Menu, MoreHorizontal, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
+import { addTracking, createAmazonAccount, createBuyGroup, createCreditCard, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, requestMissingOrderInfo, restoreOrder, reviewDeliveryBeforeTrackingAlert, reviewReminder, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, snoozeReminder, snoozeTrackingChangeAlert, updateCreditCard, updateNotificationSettings, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, calculatePayoutBreakdown, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
 type Props = {
   orders: OrderWithRelations[];
+  archivedOrders: OrderWithRelations[];
+  creditCardOrders: OrderWithRelations[];
   accounts: AmazonAccount[];
   creditCards: CreditCardModel[];
   buyGroups: BuyGroup[];
@@ -145,11 +147,14 @@ const memberStages: Array<{ key: StageFilter; label: string; short: string }> = 
   { key: "MEMBER_DONE", label: "Done", short: "Done" }
 ];
 
+const PAGE_SIZE = 25;
+
 const nav = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "Orders", icon: Package },
   { key: "accounts", label: "Credit / Accounts", icon: CreditCardIcon },
   { key: "creditCards", label: "Credit Cards", icon: CreditCardIcon },
+  { key: "archivedOrders", label: "Deleted Orders", icon: Package },
   { key: "buyGroups", label: "Buy Groups / Destinations", icon: Landmark },
   { key: "analytics", label: "Analytics", icon: Bell },
   { key: "importExport", label: "Import / Export", icon: Upload },
@@ -160,6 +165,7 @@ const personalNav = nav.filter((item) => item.key !== "importExport");
 const operatorAdminNav = [
   { key: "dashboard", label: "Admin Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "Orders", icon: Package },
+  { key: "archivedOrders", label: "Deleted Orders", icon: Package },
   { key: "queues", label: "Queues", icon: Inbox },
   { key: "members", label: "Members", icon: Home },
   { key: "memberPayouts", label: "Member Payouts", icon: CreditCardIcon },
@@ -174,6 +180,7 @@ const operatorMemberNav = [
   { key: "trackingNeeded", label: "Ordered / Tracking Needed", icon: Upload },
   { key: "accounts", label: "Credit / Accounts", icon: CreditCardIcon },
   { key: "creditCards", label: "Credit Cards", icon: CreditCardIcon },
+  { key: "archivedOrders", label: "Deleted Orders", icon: Package },
   { key: "buyGroups", label: "Buy Groups / Destinations", icon: Landmark },
   { key: "myPayouts", label: "My Payouts", icon: CreditCardIcon },
   { key: "analytics", label: "Analytics", icon: Bell },
@@ -198,6 +205,10 @@ const actionLabels: Record<string, string> = {
 
 function cls(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+function isOrderArchived(order: OrderWithRelations) {
+  return !!(order.deletedAt || order.archivedAt);
 }
 
 function formatAmazonOrderNumber(value: string) {
@@ -892,7 +903,7 @@ function stageToneKey(stage: StageFilter): OrderStage {
   return stage;
 }
 
-export default function CommandCenter({ orders, accounts, creditCards, buyGroups, warehouses, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, notificationSettings, workspaceMembers }: Props) {
+export default function CommandCenter({ orders, archivedOrders, creditCardOrders, accounts, creditCards, buyGroups, warehouses, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, notificationSettings, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
@@ -1049,7 +1060,8 @@ export default function CommandCenter({ orders, accounts, creditCards, buyGroups
             />
           )}
           {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
-          {section === "creditCards" && <CreditCardsView creditCards={creditCards} orders={orders} workspaceId={activeWorkspace.id} viewMode={viewMode} setSelectedOrder={setSelectedOrder} />}
+          {section === "creditCards" && <CreditCardsView creditCards={creditCards} orders={creditCardOrders} workspaceId={activeWorkspace.id} viewMode={viewMode} setSelectedOrder={setSelectedOrder} />}
+          {section === "archivedOrders" && <ArchivedOrdersView orders={archivedOrders} workspaceId={activeWorkspace.id} viewMode={viewMode} setSelectedOrder={setSelectedOrder} />}
           {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
           {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
           {section === "queues" && (
@@ -1555,6 +1567,35 @@ function FilterBar({
   );
 }
 
+function PaginationControls({ page, totalPages, totalCount, onPageChange }: { page: number; totalPages: number; totalCount: number; onPageChange: (page: number) => void }) {
+  if (totalPages <= 1) return null;
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-panel/70 px-3 py-2 text-sm">
+      <div className="text-muted">Showing up to {PAGE_SIZE} per page · {totalCount} total</div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page <= 1}
+          className="rounded-md border border-line px-3 py-1.5 text-muted hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <span className="text-white">Page {page} of {totalPages}</span>
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+          disabled={page >= totalPages}
+          className="rounded-md border border-line px-3 py-1.5 text-muted hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, accounts, buyGroups, warehouses, workspaceMembers, workspaceId, isAdmin, viewMode, counts, stage, setStage, query, setQuery, accountFilter, setAccountFilter, buyGroupFilter, setBuyGroupFilter, warehouseFilter, setWarehouseFilter, memberFilter, setMemberFilter, setSelectedOrder }: {
   orders: OrderWithRelations[];
   reminders: Reminder[];
@@ -1584,17 +1625,29 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
 }) {
   const workflowTabs = viewMode === "admin" ? adminStages : viewMode === "personal" ? personalStages : memberStages;
   const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(() => new Set());
-  const visibleOrderIds = useMemo(() => orders.map((order) => order.id), [orders]);
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(orders.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginatedOrders = useMemo(() => orders.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE), [orders, safePage]);
+  const visibleOrderIds = useMemo(() => paginatedOrders.map((order) => order.id), [paginatedOrders]);
   const selectedCount = selectedOrderIds.size;
   const allVisibleSelected = visibleOrderIds.length > 0 && visibleOrderIds.every((id) => selectedOrderIds.has(id));
 
   useEffect(() => {
+    setPage(1);
+  }, [accountFilter, buyGroupFilter, memberFilter, query, stage, warehouseFilter]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  useEffect(() => {
     setSelectedOrderIds((current) => {
-      const visibleIds = new Set(visibleOrderIds);
-      const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
+      const availableIds = new Set(orders.map((order) => order.id));
+      const next = new Set(Array.from(current).filter((id) => availableIds.has(id)));
       return next.size === current.size ? current : next;
     });
-  }, [visibleOrderIds]);
+  }, [orders]);
 
   const toggleOrderSelection = (id: string, selected: boolean) => {
     setSelectedOrderIds((current) => {
@@ -1663,7 +1716,7 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
         )}
       </div>
       <div className="space-y-3">
-        {orders.map((order) => (
+        {paginatedOrders.map((order) => (
           <OrderQueueCard
             key={order.id}
             order={order}
@@ -1679,6 +1732,7 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
         ))}
         {orders.length === 0 && <div className="rounded-lg border border-dashed border-line bg-panel/60 p-8 text-center text-muted">No orders in this queue.</div>}
       </div>
+      <PaginationControls page={safePage} totalPages={totalPages} totalCount={orders.length} onPageChange={setPage} />
     </section>
   );
 }
@@ -2260,7 +2314,7 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
           <form
             action={deleteOrder}
             onSubmit={(event) => {
-              if (!window.confirm(`Delete "${order.itemName}"? This cannot be undone.`)) {
+              if (!window.confirm(`Delete "${order.itemName}"? It will move to Deleted Orders and can be restored.`)) {
                 event.preventDefault();
                 return;
               }
@@ -2271,8 +2325,8 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
             <input type="hidden" name="id" value={order.id} />
             <input type="hidden" name="workspaceId" value={workspaceId} />
             <div className="mb-2 text-sm font-semibold text-white">Delete Entry</div>
-            <p className="mb-3 text-sm text-slate-300">Remove this order from the local database.</p>
-            <button className="rounded-lg border border-slate-300/40 px-3 py-2 text-sm font-medium text-white hover:bg-white/10">Delete Order</button>
+            <p className="mb-3 text-sm text-slate-300">Move this order out of normal lists while preserving card history and payment logs.</p>
+            <button className="rounded-lg border border-slate-300/40 px-3 py-2 text-sm font-medium text-white hover:bg-white/10">Move to Deleted Orders</button>
           </form>
         </aside>
       </div>
@@ -2475,6 +2529,7 @@ function orderCardPaidAt(order: OrderWithRelations, viewMode: WorkflowViewMode) 
 }
 
 function isCardCreditOpen(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (isOrderArchived(order)) return false;
   if (order.youngAdultBalanceUsed) return false;
   if (isOrderDoneForView(order, viewMode)) return false;
   if (viewMode === "member") return !order.memberMarkedDone && !order.profitReceived;
@@ -2610,6 +2665,8 @@ function CreditCardsView({ creditCards, orders, workspaceId, viewMode, setSelect
 }
 
 function CreditCardDetailModal({ card, orders, viewMode, setSelectedOrder, onClose }: { card: CreditCardModel; orders: OrderWithRelations[]; viewMode: WorkflowViewMode; setSelectedOrder: (order: OrderWithRelations) => void; onClose: () => void }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [paymentPage, setPaymentPage] = useState(1);
   const summary = cardSummary(card, orders, viewMode);
   const currentOrders = summary.activeOrders.map((order) => ({ order, financials: calculateFinancials(order) }));
   const payments = orders
@@ -2617,6 +2674,20 @@ function CreditCardDetailModal({ card, orders, viewMode, setSelectedOrder, onClo
     .filter((row) => row.paidAt)
     .sort((a, b) => new Date(b.paidAt as Date | string).getTime() - new Date(a.paidAt as Date | string).getTime());
   const series = creditCardSeries(card, orders, viewMode);
+  const currentTotalPages = Math.max(1, Math.ceil(currentOrders.length / PAGE_SIZE));
+  const paymentTotalPages = Math.max(1, Math.ceil(payments.length / PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, currentTotalPages);
+  const safePaymentPage = Math.min(paymentPage, paymentTotalPages);
+  const paginatedCurrentOrders = currentOrders.slice((safeCurrentPage - 1) * PAGE_SIZE, safeCurrentPage * PAGE_SIZE);
+  const paginatedPayments = payments.slice((safePaymentPage - 1) * PAGE_SIZE, safePaymentPage * PAGE_SIZE);
+
+  useEffect(() => {
+    if (currentPage > currentTotalPages) setCurrentPage(currentTotalPages);
+  }, [currentPage, currentTotalPages]);
+
+  useEffect(() => {
+    if (paymentPage > paymentTotalPages) setPaymentPage(paymentTotalPages);
+  }, [paymentPage, paymentTotalPages]);
 
   return (
     <Modal title={card.name} onClose={onClose} wide>
@@ -2663,7 +2734,7 @@ function CreditCardDetailModal({ card, orders, viewMode, setSelectedOrder, onClo
             <div className="text-xs text-muted">{currentOrders.length} open {currentOrders.length === 1 ? "order" : "orders"}</div>
           </div>
           <div className="space-y-2">
-            {currentOrders.map(({ order, financials }) => (
+            {paginatedCurrentOrders.map(({ order, financials }) => (
               <div key={order.id} className="grid gap-2 rounded-lg border border-line bg-surface/60 p-3 text-sm xl:grid-cols-[1.25fr_repeat(8,minmax(100px,.65fr))_auto] xl:items-center">
                 <div className="min-w-0">
                   <div className="truncate font-medium text-white">{order.itemName}</div>
@@ -2692,11 +2763,12 @@ function CreditCardDetailModal({ card, orders, viewMode, setSelectedOrder, onClo
             ))}
             {currentOrders.length === 0 && <div className="rounded-lg border border-dashed border-line p-5 text-sm text-muted">No active orders using this card.</div>}
           </div>
+          <PaginationControls page={safeCurrentPage} totalPages={currentTotalPages} totalCount={currentOrders.length} onPageChange={setCurrentPage} />
         </section>
         <section className="xl:col-span-2">
           <div className="mb-3 text-sm font-semibold">Payment Log</div>
           <div className="space-y-2">
-            {payments.map(({ order, paidAt, financials }) => (
+            {paginatedPayments.map(({ order, paidAt, financials }) => (
               <details key={order.id} className="rounded-lg border border-line bg-surface/60 p-3">
                 <summary className="cursor-pointer list-none text-sm font-medium text-white [&::-webkit-details-marker]:hidden">
                   {order.itemName} · {money(financials.amountOwed)} · {shortDate(paidAt)}
@@ -2711,9 +2783,93 @@ function CreditCardDetailModal({ card, orders, viewMode, setSelectedOrder, onClo
             ))}
             {payments.length === 0 && <div className="rounded-lg border border-dashed border-line p-5 text-sm text-muted">No card payments logged yet.</div>}
           </div>
+          <PaginationControls page={safePaymentPage} totalPages={paymentTotalPages} totalCount={payments.length} onPageChange={setPaymentPage} />
         </section>
       </div>
     </Modal>
+  );
+}
+
+function ArchivedOrdersView({ orders, workspaceId, viewMode, setSelectedOrder }: { orders: OrderWithRelations[]; workspaceId: string; viewMode: WorkflowViewMode; setSelectedOrder: (order: OrderWithRelations) => void }) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const filteredOrders = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return orders;
+    return orders.filter((order) =>
+      order.itemName.toLowerCase().includes(q) ||
+      order.orderNumber?.toLowerCase().includes(q) ||
+      order.trackingNumber?.toLowerCase().includes(q) ||
+      order.amazonAccount?.name.toLowerCase().includes(q) ||
+      order.buyGroup?.name.toLowerCase().includes(q) ||
+      order.warehouse?.name.toLowerCase().includes(q)
+    );
+  }, [orders, query]);
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginatedOrders = filteredOrders.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-lg border border-line bg-panel/70 p-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="font-semibold text-white">Deleted Orders</h2>
+          <p className="mt-1 text-sm text-muted">Archived orders are hidden from active lists and reminders, but still count in historical card records and paid logs.</p>
+        </div>
+        <label className="flex min-w-0 items-center gap-2 rounded-lg border border-cyan/20 bg-surface/80 px-3 py-2 text-muted">
+          <Search size={16} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search deleted orders" className="w-full min-w-0 border-0 bg-transparent p-0 text-sm focus:shadow-none" />
+        </label>
+      </div>
+      <div className="space-y-3">
+        {paginatedOrders.map((order) => {
+          const financials = calculateFinancials(order);
+          const payout = calculatePayoutBreakdown(order);
+          return (
+            <div key={order.id} className="rounded-lg border border-line bg-panel/70 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="truncate font-semibold text-white">{order.itemName}</h3>
+                    <span className="rounded-md border border-slate-400/30 bg-slate-500/10 px-2 py-0.5 text-xs text-slate-200">Deleted</span>
+                  </div>
+                  <div className="mt-1 text-xs text-muted">
+                    {viewMode === "admin" ? adminWorkflowLabel(order) : viewMode === "member" ? memberWorkflowLabel(order) : personalWorkflowLabel(order)}
+                    {" · "}
+                    Deleted {shortDate(order.deletedAt ?? order.archivedAt)}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => setSelectedOrder(order)} className="rounded-md border border-cyan/30 bg-cyan/10 px-3 py-1.5 text-sm text-cyan hover:bg-cyan/20">Open</button>
+                  <form action={restoreOrder}>
+                    <input type="hidden" name="id" value={order.id} />
+                    <input type="hidden" name="workspaceId" value={workspaceId} />
+                    <button className="rounded-md border border-blue-300/35 bg-blue-500/10 px-3 py-1.5 text-sm text-blue-100 hover:bg-blue-500/20">Restore</button>
+                  </form>
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2 text-sm md:grid-cols-2 xl:grid-cols-5">
+                <Fact label="Order #" value={order.orderNumber ?? "Missing"} />
+                <Fact label="Credit card" value={order.creditCard?.name ?? "Not selected"} />
+                <Fact label="Retail total" value={money(financials.totalPaid)} />
+                <Fact label={viewMode === "admin" ? "Member payout" : "Payout"} value={money(viewMode === "admin" ? payout.memberTotalPayout : financials.totalPayout)} />
+                <Fact label="Card cashback" value={money(financials.chaseCashback)} />
+              </div>
+            </div>
+          );
+        })}
+        {filteredOrders.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">No deleted orders found.</div>}
+      </div>
+      <PaginationControls page={safePage} totalPages={totalPages} totalCount={filteredOrders.length} onPageChange={setPage} />
+    </section>
   );
 }
 
@@ -2925,43 +3081,7 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
               <span className="rounded-md border border-line px-2.5 py-1.5 text-muted">Paid <CalculationLink value={money(member.paid)} breakdown={aggregateBreakdown("Member Payout Paid", member.orders.filter((order) => order.adminPaidMember || order.memberPaid), "admin", money(member.paid))} /></span>
             </div>
           </div>
-          <div className="space-y-2">
-            {member.orders.map((order) => {
-              const financials = calculateFinancials(order);
-              const payout = calculatePayoutBreakdown(order);
-              const owedToMember = order.memberPayoutAmount ?? payout.memberTotalPayout;
-              const paidToMember = order.adminPaidMember || order.memberPaid;
-              const status = paidToMember
-                ? order.memberConfirmedPayment ? "Confirmed by member" : "Paid, awaiting confirmation"
-                : "Owed to member";
-
-              return (
-                <div key={order.id} className="grid gap-3 rounded-lg border border-line bg-surface/60 px-3 py-3 text-sm lg:grid-cols-[1.4fr_repeat(4,minmax(120px,.65fr))_auto] lg:items-center">
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="truncate font-medium text-white">{order.itemName}</span>
-                      <YoungAdultBalanceBadge order={order} />
-                    </div>
-                    <div className="mt-0.5 truncate text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
-                  </div>
-                  <Fact label="Total paid" value={orderCalculationValue(order, "Total paid", money(financials.totalPaid), "admin")} />
-                  <Fact label="Cashback" value={orderCalculationValue(order, "Cashback", money(financials.totalCashback), "admin")} />
-                  <Fact label="Owed to member" value={orderCalculationValue(order, "Owed to member", money(owedToMember), "admin")} />
-                  <Fact label="Status" value={status} />
-                  {!paidToMember ? (
-                    <form action={quickAction}>
-                      <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
-                      <input type="hidden" name="id" value={order.id} />
-                      <input type="hidden" name="action" value="memberPaid" />
-                      <button className="rounded-md border border-green-400/40 px-2.5 py-1.5 text-xs text-green-100">Mark Paid</button>
-                    </form>
-                  ) : (
-                    <span className="rounded-md border border-blue-300/25 bg-blue-500/10 px-2.5 py-1.5 text-xs text-blue-100">{order.memberConfirmedPayment ? "Confirmed" : "Awaiting confirm"}</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <MemberPayoutOrderRows orders={member.orders} />
         </div>
       ))}
       {members.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-muted">No member payouts yet.</div>}
@@ -2969,12 +3089,74 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
   );
 }
 
+function MemberPayoutOrderRows({ orders }: { orders: OrderWithRelations[] }) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(orders.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginatedOrders = orders.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  return (
+    <div className="space-y-2">
+      {paginatedOrders.map((order) => {
+        const financials = calculateFinancials(order);
+        const payout = calculatePayoutBreakdown(order);
+        const owedToMember = order.memberPayoutAmount ?? payout.memberTotalPayout;
+        const paidToMember = order.adminPaidMember || order.memberPaid;
+        const status = paidToMember
+          ? order.memberConfirmedPayment ? "Confirmed by member" : "Paid, awaiting confirmation"
+          : "Owed to member";
+
+        return (
+          <div key={order.id} className="grid gap-3 rounded-lg border border-line bg-surface/60 px-3 py-3 text-sm lg:grid-cols-[1.4fr_repeat(4,minmax(120px,.65fr))_auto] lg:items-center">
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="truncate font-medium text-white">{order.itemName}</span>
+                <YoungAdultBalanceBadge order={order} />
+              </div>
+              <div className="mt-0.5 truncate text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
+            </div>
+            <Fact label="Total paid" value={orderCalculationValue(order, "Total paid", money(financials.totalPaid), "admin")} />
+            <Fact label="Cashback" value={orderCalculationValue(order, "Cashback", money(financials.totalCashback), "admin")} />
+            <Fact label="Owed to member" value={orderCalculationValue(order, "Owed to member", money(owedToMember), "admin")} />
+            <Fact label="Status" value={status} />
+            {!paidToMember ? (
+              <form action={quickAction}>
+                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                <input type="hidden" name="id" value={order.id} />
+                <input type="hidden" name="action" value="memberPaid" />
+                <button className="rounded-md border border-green-400/40 px-2.5 py-1.5 text-xs text-green-100">Mark Paid</button>
+              </form>
+            ) : (
+              <span className="rounded-md border border-blue-300/25 bg-blue-500/10 px-2.5 py-1.5 text-xs text-blue-100">{order.memberConfirmedPayment ? "Confirmed" : "Awaiting confirm"}</span>
+            )}
+          </div>
+        );
+      })}
+      <PaginationControls page={safePage} totalPages={totalPages} totalCount={orders.length} onPageChange={setPage} />
+    </div>
+  );
+}
+
 function TrackingNeededView({ orders }: { orders: OrderWithRelations[] }) {
   const trackingNeeded = orders.filter((order) => !order.trackingNumber);
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(trackingNeeded.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginatedOrders = trackingNeeded.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   return (
     <div className="space-y-3">
-      {trackingNeeded.map((order) => <OrderQueueCard key={order.id} order={order} stage="ALL" isAdmin={false} viewMode="member" memberSafe onOpen={() => undefined} />)}
+      {paginatedOrders.map((order) => <OrderQueueCard key={order.id} order={order} stage="ALL" isAdmin={false} viewMode="member" memberSafe onOpen={() => undefined} />)}
       {trackingNeeded.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">No ordered items need tracking.</div>}
+      <PaginationControls page={safePage} totalPages={totalPages} totalCount={trackingNeeded.length} onPageChange={setPage} />
     </div>
   );
 }
@@ -3008,27 +3190,49 @@ function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
       </div>
       </div>
       <div className="space-y-2">
-        {paymentSent.map((order) => (
-          <form key={order.id} action={quickAction} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-300/30 bg-blue-500/10 px-3 py-2">
-            <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
-            <input type="hidden" name="id" value={order.id} />
-            <input type="hidden" name="action" value="memberConfirmPayment" />
-            <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm"><span className="truncate">{order.itemName}</span><YoungAdultBalanceBadge order={order} /></span>
-            <span className="text-sm text-muted">{orderCalculationValue(order, "Member payout", money(order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), "member")}</span>
-            <button className="rounded-md border border-blue-300/40 px-2.5 py-1.5 text-xs text-blue-100">Confirm Payment</button>
-          </form>
-        ))}
-        {confirmed.map((order) => (
-          <form key={order.id} action={quickAction} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-green-300/30 bg-green-500/10 px-3 py-2">
-            <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
-            <input type="hidden" name="id" value={order.id} />
-            <input type="hidden" name="action" value="memberDone" />
-            <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm"><span className="truncate">{order.itemName}</span><YoungAdultBalanceBadge order={order} /></span>
-            <span className="text-xs text-green-100">Payment confirmed / credit owed</span>
-            <button className="rounded-md border border-green-300/40 px-2.5 py-1.5 text-xs text-green-100">Mark Done</button>
-          </form>
-        ))}
+        <MemberActionRows orders={paymentSent} action="memberConfirmPayment" tone="blue" />
+        <MemberActionRows orders={confirmed} action="memberDone" tone="green" />
       </div>
+    </div>
+  );
+}
+
+function MemberActionRows({ orders, action, tone }: { orders: OrderWithRelations[]; action: "memberConfirmPayment" | "memberDone"; tone: "blue" | "green" }) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(orders.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginatedOrders = orders.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const isConfirm = action === "memberConfirmPayment";
+  const className = tone === "blue"
+    ? "flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-300/30 bg-blue-500/10 px-3 py-2"
+    : "flex flex-wrap items-center justify-between gap-2 rounded-lg border border-green-300/30 bg-green-500/10 px-3 py-2";
+  const buttonClassName = tone === "blue"
+    ? "rounded-md border border-blue-300/40 px-2.5 py-1.5 text-xs text-blue-100"
+    : "rounded-md border border-green-300/40 px-2.5 py-1.5 text-xs text-green-100";
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  if (orders.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      {paginatedOrders.map((order) => (
+        <form key={order.id} action={quickAction} className={className}>
+          <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+          <input type="hidden" name="id" value={order.id} />
+          <input type="hidden" name="action" value={action} />
+          <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm"><span className="truncate">{order.itemName}</span><YoungAdultBalanceBadge order={order} /></span>
+          {isConfirm ? (
+            <span className="text-sm text-muted">{orderCalculationValue(order, "Member payout", money(order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), "member")}</span>
+          ) : (
+            <span className="text-xs text-green-100">Payment confirmed / credit owed</span>
+          )}
+          <button className={buttonClassName}>{isConfirm ? "Confirm Payment" : "Mark Done"}</button>
+        </form>
+      ))}
+      <PaginationControls page={safePage} totalPages={totalPages} totalCount={orders.length} onPageChange={setPage} />
     </div>
   );
 }

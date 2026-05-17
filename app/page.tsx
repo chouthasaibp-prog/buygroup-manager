@@ -148,13 +148,19 @@ export default async function Home({ searchParams }: Props) {
             : "ORDERED") as OrderStage
     };
   });
-  const reminders = buildReminders(visibleOrders, new Date(), viewMode);
-  const openOrders = visibleOrders.filter((order) => viewMode === "admin"
+  const isArchivedOrder = (order: typeof visibleOrders[number]) => !!(order.deletedAt || order.archivedAt);
+  const activeVisibleOrders = visibleOrders.filter((order) => !isArchivedOrder(order));
+  const archivedVisibleOrders = visibleOrders.filter(isArchivedOrder);
+  const activeTrackingChangeAlerts = trackingChangeAlerts.filter((alert) => !(alert.order.deletedAt || alert.order.archivedAt));
+  const activeDeliveryBeforeTrackingAlerts = deliveryBeforeTrackingAlerts.filter((alert) => !(alert.order.deletedAt || alert.order.archivedAt));
+
+  const reminders = buildReminders(activeVisibleOrders, new Date(), viewMode);
+  const openOrders = activeVisibleOrders.filter((order) => viewMode === "admin"
     ? !(order.adminPaidMember || order.memberPaid || order.profitReceived)
     : viewMode === "member"
       ? !(order.memberMarkedDone || order.profitReceived)
       : !order.profitReceived);
-  const totals = visibleOrders.reduce(
+  const totals = activeVisibleOrders.reduce(
     (acc, order) => {
       const financials = calculateFinancials(order);
       const payout = calculatePayoutBreakdown(order);
@@ -226,14 +232,16 @@ export default async function Home({ searchParams }: Props) {
 
   return (
     <CommandCenter
-      orders={visibleOrders}
+      orders={activeVisibleOrders}
+      archivedOrders={archivedVisibleOrders}
+      creditCardOrders={visibleOrders}
       accounts={accounts}
       creditCards={creditCards}
       buyGroups={buyGroups}
       warehouses={warehouses}
       reminders={reminders}
-      trackingChangeAlerts={trackingChangeAlerts}
-      deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts}
+      trackingChangeAlerts={activeTrackingChangeAlerts}
+      deliveryBeforeTrackingAlerts={activeDeliveryBeforeTrackingAlerts}
       totals={{ ...totals, openOrders: openOrders.length, overdueReminders: reminders.filter((item) => item.severity === "overdue").length }}
       userEmail={context.profile.email}
       profile={{

@@ -1018,7 +1018,15 @@ export async function deleteOrder(formData: FormData) {
     },
     select: { id: true }
   });
-  await prisma.order.delete({ where: { id } });
+  const now = new Date();
+  await prisma.order.update({
+    where: { id },
+    data: {
+      archivedAt: now,
+      deletedAt: now,
+      deletedByUserId: context.profile.id
+    }
+  });
   revalidatePath("/");
 }
 
@@ -1039,10 +1047,41 @@ export async function deleteOrders(formData: FormData) {
   const allowedIds = allowedOrders.map((order) => order.id);
   if (allowedIds.length === 0) return;
 
-  await prisma.order.deleteMany({
+  const now = new Date();
+  await prisma.order.updateMany({
     where: {
       id: { in: allowedIds },
       workspaceId
+    },
+    data: {
+      archivedAt: now,
+      deletedAt: now,
+      deletedByUserId: context.profile.id
+    }
+  });
+  revalidatePath("/");
+}
+
+export async function restoreOrder(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  const workspaceId = context.activeWorkspace.id;
+  const id = String(formData.get("id"));
+  if (!id) return;
+
+  await prisma.order.findFirstOrThrow({
+    where: {
+      id,
+      workspaceId,
+      ...(context.isAdmin ? {} : { submittedByProfileId: context.profile.id })
+    },
+    select: { id: true }
+  });
+  await prisma.order.update({
+    where: { id },
+    data: {
+      archivedAt: null,
+      deletedAt: null,
+      deletedByUserId: null
     }
   });
   revalidatePath("/");
