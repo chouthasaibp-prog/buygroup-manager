@@ -89,6 +89,9 @@ model WorkspaceMember {
   profileId   String
   role        WorkspaceRole
   status      WorkspaceMemberStatus @default(ACTIVE)
+  emailNotificationsEnabled Boolean @default(true)
+  slackNotificationsEnabled Boolean @default(true)
+  reminderNotificationsEnabled Boolean @default(true)
   joinedAt    DateTime?
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
@@ -260,6 +263,8 @@ model ReminderState {
   type        String
   reviewedAt  DateTime?
   snoozedUntil DateTime?
+  lastSentAt   DateTime?
+  resolvedAt   DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)

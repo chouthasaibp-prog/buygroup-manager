@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useMemo, useState } from "react";
 import type { AmazonAccount, BuyGroup, DeliveryBeforeTrackingAlert, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
 import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, MoreHorizontal, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, requestMissingOrderInfo, reviewDeliveryBeforeTrackingAlert, reviewReminder, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, snoozeReminder, snoozeTrackingChangeAlert, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
+import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, requestMissingOrderInfo, reviewDeliveryBeforeTrackingAlert, reviewReminder, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, snoozeReminder, snoozeTrackingChangeAlert, updateNotificationSettings, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, calculatePayoutBreakdown, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
@@ -39,6 +39,11 @@ type Props = {
   };
   profileId: string;
   isAdmin: boolean;
+  notificationSettings: {
+    emailNotificationsEnabled: boolean;
+    slackNotificationsEnabled: boolean;
+    reminderNotificationsEnabled: boolean;
+  };
   activeWorkspace: WorkspaceSwitcherItem;
   workspaces: WorkspaceSwitcherItem[];
   workspaceMembers: WorkspaceMemberItem[];
@@ -766,7 +771,7 @@ function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewM
     }
   }
 
-  const adminOnlyReminderTypes: Reminder["type"][] = ["check_payout", "pay_credit_card"];
+  const adminOnlyReminderTypes: Reminder["type"][] = ["check_payout"];
   for (const reminder of reminders.filter((item) => item.order.id === order.id && !isDoneReminder(item) && (viewMode !== "member" || !adminOnlyReminderTypes.includes(item.type)))) {
     alerts.push({
       id: reminder.id,
@@ -841,11 +846,11 @@ function stageToneKey(stage: StageFilter): OrderStage {
   return stage;
 }
 
-export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, workspaceMembers }: Props) {
+export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, notificationSettings, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
-  const visibleReminders = reminders.filter((reminder) => !isDoneReminder(reminder) && (viewMode !== "member" || !["submit_tracking", "check_payout", "pay_credit_card"].includes(reminder.type)));
+  const visibleReminders = reminders.filter((reminder) => !isDoneReminder(reminder) && (viewMode !== "member" || !["check_payout"].includes(reminder.type)));
   const [section, setSection] = useState<string>("dashboard");
   const [stage, setStage] = useState<StageFilter>("ALL");
   const [query, setQuery] = useState("");
@@ -1028,7 +1033,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
           {section === "myPayouts" && <MyPayoutsView orders={orders} />}
           {section === "analytics" && <AnalyticsView orders={orders} viewMode={viewMode} />}
           {section === "importExport" && <ImportExportView orders={orders} />}
-          {section === "settings" && <SettingsView profile={profile} activeWorkspace={activeWorkspace} workspaces={workspaces} />}
+          {section === "settings" && <SettingsView profile={profile} activeWorkspace={activeWorkspace} workspaces={workspaces} notificationSettings={notificationSettings} />}
         </div>
       </section>
 
@@ -1045,7 +1050,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
                 <X size={16} />
               </button>
             </div>
-            <InboxPanel reminders={visibleReminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} buyGroups={buyGroups} setSelectedOrder={(order) => {
+            <InboxPanel reminders={visibleReminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} buyGroups={buyGroups} viewMode={viewMode} setSelectedOrder={(order) => {
               setSelectedOrder(order);
               setInboxOpen(false);
             }} framed={false} />
@@ -1176,12 +1181,12 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
           </div>
         </div>
       </section>
-      <InboxPanel reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} buyGroups={buyGroups} setSelectedOrder={setSelectedOrder} />
+      <InboxPanel reminders={reminders} trackingChangeAlerts={trackingChangeAlerts} deliveryBeforeTrackingAlerts={deliveryBeforeTrackingAlerts} buyGroups={buyGroups} viewMode={viewMode} setSelectedOrder={setSelectedOrder} />
     </div>
   );
 }
 
-function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, buyGroups, setSelectedOrder, framed = true }: { reminders: Reminder[]; trackingChangeAlerts: TrackingChangeAlertItem[]; deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]; buyGroups: BuyGroup[]; setSelectedOrder: (order: OrderWithRelations) => void; framed?: boolean }) {
+function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, buyGroups, viewMode, setSelectedOrder, framed = true }: { reminders: Reminder[]; trackingChangeAlerts: TrackingChangeAlertItem[]; deliveryBeforeTrackingAlerts: DeliveryBeforeTrackingAlertItem[]; buyGroups: BuyGroup[]; viewMode: WorkflowViewMode; setSelectedOrder: (order: OrderWithRelations) => void; framed?: boolean }) {
   const actionableReminders = reminders.filter((reminder) => !isDoneReminder(reminder));
 
   return (
@@ -1232,7 +1237,7 @@ function InboxPanel({ reminders, trackingChangeAlerts, deliveryBeforeTrackingAle
                   </button>
                   <ReminderActionMenu reminder={item} onOpen={() => setSelectedOrder(item.order)} />
                 </div>
-                <ReminderAction reminder={item} buyGroups={buyGroups} />
+                <ReminderAction reminder={item} buyGroups={buyGroups} viewMode={viewMode} />
               </div>
             ))}
             {actionableReminders.filter((item) => item.severity === group).length === 0 && <div className="rounded-lg border border-dashed border-line px-3 py-4 text-sm text-muted">Clear</div>}
@@ -1375,7 +1380,7 @@ function DeliveryBeforeTrackingAlertCard({ alert, setSelectedOrder }: { alert: D
   );
 }
 
-function ReminderAction({ reminder, buyGroups }: { reminder: Reminder; buyGroups: BuyGroup[] }) {
+function ReminderAction({ reminder, buyGroups, viewMode }: { reminder: Reminder; buyGroups: BuyGroup[]; viewMode: WorkflowViewMode }) {
   if (reminder.type === "missing_amazon_account") {
     if (!reminder.action.startsWith("Request")) return null;
     return (
@@ -1418,7 +1423,7 @@ function ReminderAction({ reminder, buyGroups }: { reminder: Reminder; buyGroups
   const action =
     reminder.type === "submit_tracking" ? "submitTracking" :
     reminder.type === "check_payout" ? "paidOut" :
-    reminder.type === "pay_credit_card" ? "cardPaid" : "";
+    reminder.type === "pay_credit_card" ? viewMode === "admin" ? "memberPaid" : viewMode === "member" ? "memberDone" : "cardPaid" : "";
 
   if (!action) return null;
   return (
@@ -2857,8 +2862,17 @@ function ProfitChart({ series }: { series: ReturnType<typeof buildProfitSeries> 
   );
 }
 
-function SettingsView({ profile, activeWorkspace, workspaces }: { profile: Props["profile"]; activeWorkspace: WorkspaceSwitcherItem; workspaces: WorkspaceSwitcherItem[] }) {
+function SettingsView({ profile, activeWorkspace, workspaces, notificationSettings }: { profile: Props["profile"]; activeWorkspace: WorkspaceSwitcherItem; workspaces: WorkspaceSwitcherItem[]; notificationSettings: Props["notificationSettings"] }) {
   const hasPersonalWorkspace = workspaces.some((workspace) => workspace.type === "PERSONAL");
+  const canTestNotifications = process.env.NODE_ENV === "development" || activeWorkspace.role === "OWNER" || activeWorkspace.role === "ADMIN";
+  const sendTestNotification = async (channel: "email" | "slack") => {
+    const response = await fetch("/api/dev/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId: activeWorkspace.id, channel })
+    });
+    window.alert(response.ok ? `Test ${channel} sent.` : `Test ${channel} failed.`);
+  };
   return (
     <div className="space-y-4">
       <section className="rounded-lg border border-cyan/20 bg-panel/80 p-5 shadow-glow">
@@ -2904,15 +2918,21 @@ function SettingsView({ profile, activeWorkspace, workspaces }: { profile: Props
 
       <section className="rounded-lg border border-slate-500/30 bg-panel/80 p-5 shadow-glow">
         <h2 className="mb-4 font-semibold">Notification Settings</h2>
-        {["In-app only", "Email", "Google Calendar", "n8n webhook"].map((label, index) => (
-          <label key={label} className="mb-3 flex items-center gap-3 rounded-lg border border-line bg-surface/60 px-3 py-3">
-            <input type="radio" name="notifications" defaultChecked={index === 0} />
-            <span>{label}</span>
-            {index > 0 && <span className="ml-auto text-xs text-muted">Placeholder</span>}
-          </label>
-        ))}
+        <form action={updateNotificationSettings} className="space-y-3">
+          <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
+          <CheckField name="reminderNotificationsEnabled" label="In-app reminder engine enabled" defaultChecked={notificationSettings.reminderNotificationsEnabled} />
+          <CheckField name="emailNotificationsEnabled" label="Email notifications via Resend" defaultChecked={notificationSettings.emailNotificationsEnabled} />
+          <CheckField name="slackNotificationsEnabled" label="Slack webhook notifications" defaultChecked={notificationSettings.slackNotificationsEnabled} />
+          <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Save Notification Settings</button>
+        </form>
+        {canTestNotifications && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" onClick={() => sendTestNotification("email")} className="rounded-lg border border-blue-300/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-100 hover:bg-blue-500/20">Send test email</button>
+            <button type="button" onClick={() => sendTestNotification("slack")} className="rounded-lg border border-green-300/30 bg-green-500/10 px-3 py-2 text-sm text-green-100 hover:bg-green-500/20">Send test Slack</button>
+          </div>
+        )}
         <div className="mt-4 rounded-lg border border-line bg-surface/60 p-4 text-sm text-muted">
-          Future credentials belong in `.env`: email API key, Google OAuth credentials, and webhook URLs. Missing integrations are skipped safely.
+          Reminder notifications can be sent in-app, by email, and to the configured Slack webhook. Missing integrations are skipped safely.
         </div>
       </section>
     </div>

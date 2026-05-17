@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS "ReminderState" (
   "type" TEXT NOT NULL,
   "reviewedAt" DATETIME,
   "snoozedUntil" DATETIME,
+  "lastSentAt" DATETIME,
+  "resolvedAt" DATETIME,
   "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ReminderState_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE CASCADE ON UPDATE CASCADE,

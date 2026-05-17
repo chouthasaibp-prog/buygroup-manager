@@ -974,6 +974,23 @@ export async function updateProfile(formData: FormData) {
   revalidatePath("/");
 }
 
+export async function updateNotificationSettings(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  await prisma.workspaceMember.updateMany({
+    where: {
+      workspaceId: context.activeWorkspace.id,
+      profileId: context.profile.id
+    },
+    data: {
+      emailNotificationsEnabled: boolFromForm(formData, "emailNotificationsEnabled"),
+      slackNotificationsEnabled: boolFromForm(formData, "slackNotificationsEnabled"),
+      reminderNotificationsEnabled: boolFromForm(formData, "reminderNotificationsEnabled")
+    }
+  });
+
+  revalidatePath("/");
+}
+
 export async function createPersonalWorkspaceFromApp() {
   const profile = await ensureProfile();
   const existing = await prisma.workspaceMember.findFirst({

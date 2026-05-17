@@ -249,6 +249,11 @@ export default async function Home({ searchParams }: Props) {
       }}
       profileId={context.profile.id}
       isAdmin={context.isAdmin}
+      notificationSettings={{
+        emailNotificationsEnabled: context.activeMembership.emailNotificationsEnabled,
+        slackNotificationsEnabled: context.activeMembership.slackNotificationsEnabled,
+        reminderNotificationsEnabled: context.activeMembership.reminderNotificationsEnabled
+      }}
       workspaceMembers={workspaceMembers.map((membership) => ({
         id: membership.id,
         profileId: membership.profileId,
