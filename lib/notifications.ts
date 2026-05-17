@@ -187,11 +187,12 @@ function reminderCadenceHours(reminder: Reminder, mode: "personal" | "member" | 
   return null;
 }
 
-async function shouldSendReminder(reminder: Reminder, recipient: WorkspaceMember, now: Date, mode: "personal" | "member" | "admin") {
+async function shouldSendReminder(reminder: Reminder, recipient: WorkspaceMember, now: Date, mode: "personal" | "member" | "admin", force = false) {
   const state = reminder.order.reminderStates?.find((item) => item.type === reminder.type);
   if (state?.reviewedAt || state?.resolvedAt) return false;
   if (state?.snoozedUntil && state.snoozedUntil > now) return false;
   if (!recipient.reminderNotificationsEnabled) return false;
+  if (force) return true;
   if (!state?.lastSentAt) return true;
   const cadenceHours = reminderCadenceHours(reminder, mode);
   if (!cadenceHours) return false;
@@ -209,6 +210,16 @@ async function markReminderSent(reminder: Reminder, now: Date) {
       lastSentAt: now
     }
   });
+}
+
+async function recentlySent(orderId: string, type: Reminder["type"], now: Date) {
+  const state = await prisma.reminderState.findUnique({
+    where: { orderId_type: { orderId, type } },
+    select: { lastSentAt: true, reviewedAt: true, resolvedAt: true, snoozedUntil: true }
+  });
+  if (state?.reviewedAt || state?.resolvedAt) return true;
+  if (state?.snoozedUntil && state.snoozedUntil > now) return true;
+  return !!state?.lastSentAt && now.getTime() - state.lastSentAt.getTime() < 30_000;
 }
 
 async function resolveFixedReminderStates(order: OrderForNotifications) {
@@ -230,14 +241,14 @@ async function resolveFixedReminderStates(order: OrderForNotifications) {
   });
 }
 
-async function notifyRemindersForRecipient(recipient: MemberWithProfile, orders: OrderForNotifications[], mode: "personal" | "member" | "admin", now: Date) {
+async function notifyRemindersForRecipient(recipient: MemberWithProfile, orders: OrderForNotifications[], mode: "personal" | "member" | "admin", now: Date, force = false) {
   const activeOrders = orders.filter((order) => !isDoneForMode(order, mode));
   await Promise.all(orders.map(resolveFixedReminderStates));
   const reminders = buildReminders(activeOrders, now, mode);
   let sent = 0;
 
   for (const reminder of reminders) {
-    if (!(await shouldSendReminder(reminder, recipient, now, mode))) continue;
+    if (!(await shouldSendReminder(reminder, recipient, now, mode, force))) continue;
     await sendNotification({
       userId: recipient.profileId,
       workspaceId: recipient.workspaceId,
@@ -255,7 +266,7 @@ async function notifyRemindersForRecipient(recipient: MemberWithProfile, orders:
   return sent;
 }
 
-export async function runReminderNotificationCron(now = new Date()) {
+export async function runReminderNotificationCron(now = new Date(), options: { force?: boolean } = {}) {
   const memberships = await prisma.workspaceMember.findMany({
     where: { status: "ACTIVE", reminderNotificationsEnabled: true },
     include: { profile: true, workspace: true }
@@ -271,10 +282,56 @@ export async function runReminderNotificationCron(now = new Date()) {
       },
       include: reminderIncludes
     });
-    sent += await notifyRemindersForRecipient(membership, orders as OrderForNotifications[], mode, now);
+    sent += await notifyRemindersForRecipient(membership, orders as OrderForNotifications[], mode, now, options.force ?? false);
   }
 
   return { sent };
+}
+
+export async function sendImmediatePersonalWorkflowNotifications({
+  workspaceId,
+  profileId,
+  orderId,
+  types,
+  now = new Date()
+}: {
+  workspaceId: string;
+  profileId: string;
+  orderId: string;
+  types: Reminder["type"][];
+  now?: Date;
+}) {
+  if (types.length === 0) return 0;
+  const [recipient, order] = await Promise.all([
+    prisma.workspaceMember.findFirst({
+      where: { workspaceId, profileId, status: "ACTIVE", reminderNotificationsEnabled: true },
+      include: { profile: true, workspace: true }
+    }),
+    prisma.order.findFirst({
+      where: { id: orderId, workspaceId, submittedByProfileId: profileId },
+      include: reminderIncludes
+    })
+  ]);
+  if (!recipient || !order || order.workspace?.type !== "PERSONAL" || isDoneForMode(order as OrderForNotifications, "personal")) return 0;
+
+  const reminders = buildReminders([order as OrderForNotifications], now, "personal").filter((reminder) => types.includes(reminder.type));
+  let sent = 0;
+  for (const reminder of reminders) {
+    if (await recentlySent(reminder.order.id, reminder.type, now)) continue;
+    await sendNotification({
+      userId: recipient.profileId,
+      workspaceId: recipient.workspaceId,
+      orderId: reminder.order.id,
+      type: reminder.type,
+      title: reminderSubject(reminder),
+      message: reminderMessage(reminder, "personal"),
+      severity: severityFor(reminder),
+      channels: channelsForMember(recipient)
+    });
+    await markReminderSent(reminder, now);
+    sent += 1;
+  }
+  return sent;
 }
 
 export async function sendTestNotification(profileId: string, workspaceId: string, channel: "email" | "slack") {

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { calculateFinancials, calculatePayoutBreakdown, deriveStage } from "@/lib/domain";
+import { sendImmediatePersonalWorkflowNotifications } from "@/lib/notifications";
 import { createWorkspaceForProfile, ensureProfile, requireWorkspaceActionContext } from "@/lib/workspace";
 import type { Order, OrderStage, PayoutMode, WorkspaceType } from "@prisma/client";
 
@@ -258,6 +259,14 @@ export async function createOrder(formData: FormData) {
   });
 
   await deriveStagePatch(workspaceId, order.id);
+  if (isPersonal) {
+    await sendImmediatePersonalWorkflowNotifications({
+      workspaceId,
+      profileId: context.profile.id,
+      orderId: order.id,
+      types: trackingNumber ? ["commit_warehouse", "check_delivery"] : ["commit_warehouse", "submit_tracking"]
+    });
+  }
   revalidatePath("/");
 }
 
@@ -429,6 +438,20 @@ export async function updateOrder(formData: FormData) {
   }
 
   await deriveStagePatch(workspaceId, id);
+  if (isPersonal) {
+    const immediateTypes = [
+      trackingSubmitted && !existing.trackingSubmitted ? "check_delivery" : null,
+      delivered && !existing.delivered ? "check_scan" : null,
+      scanned && !existing.scanned ? "check_payout" : null,
+      paidOut && !existing.paidOut ? "pay_credit_card" : null
+    ].filter((value): value is "check_delivery" | "check_scan" | "check_payout" | "pay_credit_card" => !!value);
+    await sendImmediatePersonalWorkflowNotifications({
+      workspaceId,
+      profileId: context.profile.id,
+      orderId: id,
+      types: immediateTypes
+    });
+  }
   revalidatePath("/");
 }
 
@@ -485,6 +508,14 @@ export async function addTracking(_previousState: AddTrackingState, formData: Fo
     }
 
     await deriveStagePatch(workspaceId, id);
+    if (isPersonal && !existing.trackingSubmitted) {
+      await sendImmediatePersonalWorkflowNotifications({
+        workspaceId,
+        profileId: context.profile.id,
+        orderId: id,
+        types: ["check_delivery"]
+      });
+    }
     revalidatePath("/");
     return { error: null };
   } catch {
@@ -709,6 +740,20 @@ export async function quickAction(formData: FormData) {
       });
     }
     await deriveStagePatch(workspaceId, id);
+    if (isPersonal) {
+      const immediateTypes = [
+        data.trackingSubmitted ? "check_delivery" : null,
+        data.delivered ? "check_scan" : null,
+        data.scanned ? "check_payout" : null,
+        data.paidOut ? "pay_credit_card" : null
+      ].filter((value): value is "check_delivery" | "check_scan" | "check_payout" | "pay_credit_card" => !!value);
+      await sendImmediatePersonalWorkflowNotifications({
+        workspaceId,
+        profileId: context.profile.id,
+        orderId: id,
+        types: immediateTypes
+      });
+    }
   }
 
   revalidatePath("/");
