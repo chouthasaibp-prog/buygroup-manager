@@ -25,6 +25,16 @@ export const stageLabels: Record<OrderStage, string> = {
 
 export type OrderWithRelations = Order & {
   amazonAccount: { id: string; name: string; defaultCreditCardDueDays: number | null } | null;
+  creditCard?: {
+    id: string;
+    name: string;
+    issuer: string | null;
+    last4: string | null;
+    creditLimit: number;
+    utilizationWarningPercent: number;
+    cashbackOptions: unknown;
+    defaultCashbackPercent: number;
+  } | null;
   buyGroup: { id: string; name: string } | null;
   warehouse: { id: string; name: string; code: string } | null;
   submittedBy?: { id: string; name: string | null; firstName: string | null; lastName: string | null; email: string } | null;

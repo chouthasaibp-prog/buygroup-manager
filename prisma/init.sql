@@ -7,6 +7,21 @@ CREATE TABLE IF NOT EXISTS "AmazonAccount" (
   "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS "CreditCard" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "userId" TEXT,
+  "workspaceId" TEXT,
+  "name" TEXT NOT NULL,
+  "issuer" TEXT,
+  "last4" TEXT,
+  "creditLimit" REAL NOT NULL DEFAULT 0,
+  "utilizationWarningPercent" REAL NOT NULL DEFAULT 30,
+  "cashbackOptions" TEXT,
+  "defaultCashbackPercent" REAL NOT NULL DEFAULT 5,
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS "BuyGroup" (
   "id" TEXT NOT NULL PRIMARY KEY,
   "name" TEXT NOT NULL UNIQUE,
@@ -61,9 +76,11 @@ CREATE TABLE IF NOT EXISTS "Order" (
   "profitReceivedAt" DATETIME,
   "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "amazonAccountId" TEXT,
+  "creditCardId" TEXT,
   "buyGroupId" TEXT,
   "warehouseId" TEXT,
   CONSTRAINT "Order_amazonAccountId_fkey" FOREIGN KEY ("amazonAccountId") REFERENCES "AmazonAccount" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT "Order_creditCardId_fkey" FOREIGN KEY ("creditCardId") REFERENCES "CreditCard" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT "Order_buyGroupId_fkey" FOREIGN KEY ("buyGroupId") REFERENCES "BuyGroup" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT "Order_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
@@ -85,5 +102,8 @@ CREATE TABLE IF NOT EXISTS "ReminderState" (
 
 CREATE INDEX IF NOT EXISTS "Order_currentStage_idx" ON "Order"("currentStage");
 CREATE INDEX IF NOT EXISTS "Order_amazonAccountId_idx" ON "Order"("amazonAccountId");
+CREATE INDEX IF NOT EXISTS "Order_creditCardId_idx" ON "Order"("creditCardId");
 CREATE INDEX IF NOT EXISTS "Order_buyGroupId_idx" ON "Order"("buyGroupId");
 CREATE INDEX IF NOT EXISTS "Order_warehouseId_idx" ON "Order"("warehouseId");
+CREATE INDEX IF NOT EXISTS "CreditCard_userId_idx" ON "CreditCard"("userId");
+CREATE INDEX IF NOT EXISTS "CreditCard_workspaceId_idx" ON "CreditCard"("workspaceId");

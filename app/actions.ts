@@ -85,11 +85,35 @@ async function requireWorkspaceAmazonAccountId(workspaceId: string, id: string |
   return account.id;
 }
 
+async function requireWorkspaceCreditCardId(workspaceId: string, profileId: string, id: string | null) {
+  if (!id) return null;
+  const card = await prisma.creditCard.findFirst({ where: { id, workspaceId, userId: profileId }, select: { id: true } });
+  if (!card) throw new Error("Credit card not found.");
+  return card.id;
+}
+
 async function requireWorkspaceBuyGroupId(workspaceId: string, id: string | null) {
   if (!id) return null;
   const buyGroup = await prisma.buyGroup.findFirst({ where: { id, workspaceId }, select: { id: true } });
   if (!buyGroup) throw new Error("Buy group not found.");
   return buyGroup.id;
+}
+
+function parseCashbackOptions(formData: FormData) {
+  const raw = String(formData.get("cashbackOptions") ?? "")
+    .split(/[\s,]+/)
+    .map((value) => value.trim().replace(/%$/, ""))
+    .filter(Boolean);
+  const percentages = raw
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
+  return Array.from(new Set(percentages.length > 0 ? percentages : [5, 6, 7])).sort((a, b) => a - b);
+}
+
+function assertCanManageCreditCards(context: Awaited<ReturnType<typeof requireWorkspaceActionContext>>) {
+  if (context.activeWorkspace.type === "OPERATOR" && context.isAdmin) {
+    throw new Error("Operator admins cannot manage member credit cards.");
+  }
 }
 
 async function destinationIdForBuyGroup(workspaceId: string, buyGroupId: string | null) {
@@ -194,6 +218,7 @@ export async function createOrder(formData: FormData) {
   const destinationId = await destinationIdForBuyGroup(workspaceId, buyGroupId);
   const trackingNumber = optionalAmazonTrackingNumber(formData);
   const amazonAccountId = await requireWorkspaceAmazonAccountId(workspaceId, optionalString(formData, "amazonAccountId"));
+  const creditCardId = isOperatorAdmin ? null : await requireWorkspaceCreditCardId(workspaceId, context.profile.id, optionalString(formData, "creditCardId"));
   const quantity = Math.max(1, numberFromForm(formData, "quantity", 1));
   const payoutData = buildPayoutData({
     formData,
@@ -226,6 +251,7 @@ export async function createOrder(formData: FormData) {
       memberSubmittedTrackingToAdminAt: !isPersonal && trackingNumber ? new Date() : null,
       notes: optionalString(formData, "notes"),
       amazonAccountId,
+      creditCardId,
       buyGroupId,
       warehouseId: destinationId
     }
@@ -273,6 +299,7 @@ export async function updateOrder(formData: FormData) {
   const buyGroupId = await requireWorkspaceBuyGroupId(workspaceId, optionalString(formData, "buyGroupId"));
   const destinationId = await destinationIdForBuyGroup(workspaceId, buyGroupId);
   const amazonAccountId = await requireWorkspaceAmazonAccountId(workspaceId, optionalString(formData, "amazonAccountId"));
+  const creditCardId = isOperatorAdmin ? existing.creditCardId : await requireWorkspaceCreditCardId(workspaceId, context.profile.id, optionalString(formData, "creditCardId"));
   const quantity = Math.max(1, numberFromForm(formData, "quantity", existing.quantity));
   const existingMemberPayoutPerUnit = existing.memberPayoutPerUnit ?? existing.payoutPerUnit;
   const existingWarehousePayoutPerUnit = existing.warehousePayoutPerUnit ?? existing.payoutPerUnit;
@@ -347,6 +374,7 @@ export async function updateOrder(formData: FormData) {
       notes: optionalString(formData, "notes"),
       memberVisibleNotes: optionalString(formData, "memberVisibleNotes"),
       amazonAccountId,
+      creditCardId,
       buyGroupId,
       warehouseId: destinationId,
       manualCreditCardDueDate: optionalString(formData, "manualCreditCardDueDate")
@@ -832,6 +860,64 @@ export async function createAmazonAccount(formData: FormData) {
       workspaceId,
       name,
       defaultCreditCardDueDays: numberFromForm(formData, "defaultCreditCardDueDays", 7)
+    }
+  });
+
+  revalidatePath("/");
+}
+
+export async function createCreditCard(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  assertCanManageCreditCards(context);
+  const workspaceId = context.activeWorkspace.id;
+  const name = optionalString(formData, "name");
+  if (!name) return;
+
+  await prisma.creditCard.upsert({
+    where: { workspaceId_userId_name: { workspaceId, userId: context.profile.id, name } },
+    update: {
+      issuer: optionalString(formData, "issuer"),
+      last4: optionalString(formData, "last4"),
+      creditLimit: numberFromForm(formData, "creditLimit"),
+      utilizationWarningPercent: numberFromForm(formData, "utilizationWarningPercent", 30),
+      cashbackOptions: parseCashbackOptions(formData),
+      defaultCashbackPercent: numberFromForm(formData, "defaultCashbackPercent", 5)
+    },
+    create: {
+      userId: context.profile.id,
+      workspaceId,
+      name,
+      issuer: optionalString(formData, "issuer"),
+      last4: optionalString(formData, "last4"),
+      creditLimit: numberFromForm(formData, "creditLimit"),
+      utilizationWarningPercent: numberFromForm(formData, "utilizationWarningPercent", 30),
+      cashbackOptions: parseCashbackOptions(formData),
+      defaultCashbackPercent: numberFromForm(formData, "defaultCashbackPercent", 5)
+    }
+  });
+
+  revalidatePath("/");
+}
+
+export async function updateCreditCard(formData: FormData) {
+  const context = await requireWorkspaceActionContext(formData);
+  assertCanManageCreditCards(context);
+  const workspaceId = context.activeWorkspace.id;
+  const id = String(formData.get("id") ?? "");
+  const name = optionalString(formData, "name");
+  if (!id || !name) return;
+
+  await prisma.creditCard.findFirstOrThrow({ where: { id, workspaceId, userId: context.profile.id }, select: { id: true } });
+  await prisma.creditCard.update({
+    where: { id },
+    data: {
+      name,
+      issuer: optionalString(formData, "issuer"),
+      last4: optionalString(formData, "last4"),
+      creditLimit: numberFromForm(formData, "creditLimit"),
+      utilizationWarningPercent: numberFromForm(formData, "utilizationWarningPercent", 30),
+      cashbackOptions: parseCashbackOptions(formData),
+      defaultCashbackPercent: numberFromForm(formData, "defaultCashbackPercent", 5)
     }
   });
 

@@ -72,6 +72,7 @@ model Workspace {
   owner          Profile           @relation("WorkspaceOwner", fields: [ownerProfileId], references: [id], onDelete: Cascade)
   members        WorkspaceMember[]
   accounts       AmazonAccount[]
+  creditCards    CreditCard[]
   buyGroups      BuyGroup[]
   warehouses     Warehouse[]
   orders         Order[]
@@ -116,6 +117,27 @@ model AmazonAccount {
 
   @@unique([userId, name])
   @@unique([workspaceId, name])
+  @@index([userId])
+  @@index([workspaceId])
+}
+
+model CreditCard {
+  id                        String     @id @default(cuid())
+  userId                    String?
+  workspaceId               String?
+  name                      String
+  issuer                    String?
+  last4                     String?
+  creditLimit               Float      @default(0)
+  utilizationWarningPercent Float      @default(30)
+  cashbackOptions           Json?
+  defaultCashbackPercent    Float      @default(5)
+  createdAt                 DateTime   @default(now())
+  updatedAt                 DateTime   @updatedAt
+  workspace                 Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orders                    Order[]
+
+  @@unique([workspaceId, userId, name])
   @@index([userId])
   @@index([workspaceId])
 }
@@ -228,6 +250,7 @@ model Order {
   adminProfit                        Float?
   adminMargin                        Float?
   amazonAccountId                    String?
+  creditCardId                       String?
   buyGroupId                         String?
   warehouseId                        String?
   workspace                          Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -235,6 +258,7 @@ model Order {
   createdBy                          Profile?       @relation("OrderCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
   assignedOperator                   Profile?       @relation("OrderAssignedOperator", fields: [assignedOperatorProfileId], references: [id], onDelete: SetNull)
   amazonAccount                      AmazonAccount? @relation(fields: [amazonAccountId], references: [id], onDelete: SetNull)
+  creditCard                         CreditCard?    @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
   buyGroup                           BuyGroup?      @relation(fields: [buyGroupId], references: [id], onDelete: SetNull)
   warehouse                          Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
   trackingChangeAlerts               TrackingChangeAlert[]
@@ -252,6 +276,7 @@ model Order {
   @@index([workspaceId, memberMarkedDone])
   @@index([currentStage])
   @@index([amazonAccountId])
+  @@index([creditCardId])
   @@index([buyGroupId])
   @@index([warehouseId])
 }

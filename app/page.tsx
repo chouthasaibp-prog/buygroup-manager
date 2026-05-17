@@ -10,8 +10,8 @@ type Props = {
   searchParams: Promise<{ workspace?: string }>;
 };
 
-const orderInclude = { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true } as const;
-const orderIncludeWithoutReminderState = { amazonAccount: true, buyGroup: true, warehouse: true, submittedBy: true } as const;
+const orderInclude = { amazonAccount: true, creditCard: true, buyGroup: true, warehouse: true, submittedBy: true, reminderStates: true } as const;
+const orderIncludeWithoutReminderState = { amazonAccount: true, creditCard: true, buyGroup: true, warehouse: true, submittedBy: true } as const;
 
 async function findOrdersWithReminderStateFallback(where: ReturnType<typeof orderVisibilityWhere>) {
   try {
@@ -36,9 +36,16 @@ export default async function Home({ searchParams }: Props) {
   const context = await getWorkspaceContext(params.workspace);
   const workspaceWhere = { workspaceId: context.activeWorkspace.id };
   const orderWhere = orderVisibilityWhere(context);
-  const [orders, accounts, buyGroups, warehouses, workspaceMembers, trackingChangeAlerts, deliveryBeforeTrackingAlerts] = await Promise.all([
+  const viewMode = context.activeWorkspace.type === "PERSONAL" ? "personal" : context.isAdmin ? "admin" : "member";
+  const [orders, accounts, creditCards, buyGroups, warehouses, workspaceMembers, trackingChangeAlerts, deliveryBeforeTrackingAlerts] = await Promise.all([
     findOrdersWithReminderStateFallback(orderWhere),
     prisma.amazonAccount.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
+    viewMode === "admin"
+      ? Promise.resolve([])
+      : prisma.creditCard.findMany({
+          where: { ...workspaceWhere, userId: context.profile.id },
+          orderBy: { name: "asc" }
+        }),
     prisma.buyGroup.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
     prisma.warehouse.findMany({ where: workspaceWhere, orderBy: { name: "asc" } }),
     context.isAdmin
@@ -139,7 +146,6 @@ export default async function Home({ searchParams }: Props) {
             : "ORDERED") as OrderStage
     };
   });
-  const viewMode = context.activeWorkspace.type === "PERSONAL" ? "personal" : context.isAdmin ? "admin" : "member";
   const reminders = buildReminders(visibleOrders, new Date(), viewMode);
   const openOrders = visibleOrders.filter((order) => viewMode === "admin"
     ? !(order.adminPaidMember || order.memberPaid || order.profitReceived)
@@ -220,6 +226,7 @@ export default async function Home({ searchParams }: Props) {
     <CommandCenter
       orders={visibleOrders}
       accounts={accounts}
+      creditCards={creditCards}
       buyGroups={buyGroups}
       warehouses={warehouses}
       reminders={reminders}

@@ -1,15 +1,16 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useState } from "react";
-import type { AmazonAccount, BuyGroup, DeliveryBeforeTrackingAlert, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
-import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, MoreHorizontal, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
-import { addTracking, createAmazonAccount, createBuyGroup, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, requestMissingOrderInfo, reviewDeliveryBeforeTrackingAlert, reviewReminder, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, snoozeReminder, snoozeTrackingChangeAlert, updateNotificationSettings, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
+import type { AmazonAccount, BuyGroup, CreditCard as CreditCardModel, DeliveryBeforeTrackingAlert, OrderStage, Profile, TrackingChangeAlert, Warehouse, WorkspaceRole, WorkspaceType } from "@prisma/client";
+import { AlertTriangle, Bell, ChevronRight, Copy, CreditCard as CreditCardIcon, Download, Home, Inbox, Landmark, LayoutDashboard, LogOut, MoreHorizontal, Package, Plus, Search, Settings, Upload, X } from "lucide-react";
+import { addTracking, createAmazonAccount, createBuyGroup, createCreditCard, createOperatorWorkspaceFromApp, createOrder, createPersonalWorkspaceFromApp, deleteOrder, deleteOrders, joinOperatorWorkspaceFromApp, markWarehouseTrackingUpdated, quickAction, requestMissingOrderInfo, reviewDeliveryBeforeTrackingAlert, reviewReminder, reviewTrackingChangeAlert, setAccountDefaultDueDays, setOrderBuyGroup, snoozeDeliveryBeforeTrackingAlert, snoozeReminder, snoozeTrackingChangeAlert, updateCreditCard, updateNotificationSettings, updateOrder, updateProfile, updateWorkspaceMemberStatus, type AddTrackingState } from "@/app/actions";
 import { signOut } from "@/app/login/actions";
 import { calculateFinancials, calculatePayoutBreakdown, dateTime, money, type OrderWithRelations, type Reminder, shortDate, stageLabels } from "@/lib/domain";
 
 type Props = {
   orders: OrderWithRelations[];
   accounts: AmazonAccount[];
+  creditCards: CreditCardModel[];
   buyGroups: BuyGroup[];
   warehouses: Warehouse[];
   reminders: Reminder[];
@@ -144,7 +145,8 @@ const memberStages: Array<{ key: StageFilter; label: string; short: string }> = 
 const nav = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "Orders", icon: Package },
-  { key: "accounts", label: "Credit / Accounts", icon: CreditCard },
+  { key: "accounts", label: "Credit / Accounts", icon: CreditCardIcon },
+  { key: "creditCards", label: "Credit Cards", icon: CreditCardIcon },
   { key: "buyGroups", label: "Buy Groups / Destinations", icon: Landmark },
   { key: "analytics", label: "Analytics", icon: Bell },
   { key: "importExport", label: "Import / Export", icon: Upload },
@@ -157,7 +159,7 @@ const operatorAdminNav = [
   { key: "orders", label: "Orders", icon: Package },
   { key: "queues", label: "Queues", icon: Inbox },
   { key: "members", label: "Members", icon: Home },
-  { key: "memberPayouts", label: "Member Payouts", icon: CreditCard },
+  { key: "memberPayouts", label: "Member Payouts", icon: CreditCardIcon },
   { key: "buyGroups", label: "Buy Groups", icon: Landmark },
   { key: "warehouses", label: "Warehouses", icon: Inbox },
   { key: "analytics", label: "Analytics", icon: Bell },
@@ -167,9 +169,10 @@ const operatorMemberNav = [
   { key: "dashboard", label: "My Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "My Orders", icon: Package },
   { key: "trackingNeeded", label: "Ordered / Tracking Needed", icon: Upload },
-  { key: "accounts", label: "Credit / Accounts", icon: CreditCard },
+  { key: "accounts", label: "Credit / Accounts", icon: CreditCardIcon },
+  { key: "creditCards", label: "Credit Cards", icon: CreditCardIcon },
   { key: "buyGroups", label: "Buy Groups / Destinations", icon: Landmark },
-  { key: "myPayouts", label: "My Payouts", icon: CreditCard },
+  { key: "myPayouts", label: "My Payouts", icon: CreditCardIcon },
   { key: "analytics", label: "Analytics", icon: Bell },
   { key: "settings", label: "Settings", icon: Settings }
 ] as const;
@@ -237,6 +240,8 @@ function isMoneyBreakdownLabel(label: string) {
     || normalized.includes("spread")
     || normalized.includes("profit")
     || normalized.includes("cashback")
+    || normalized.includes("gross")
+    || normalized.includes("net")
     || normalized.includes("total paid")
     || normalized.includes("total spent");
 }
@@ -846,7 +851,7 @@ function stageToneKey(stage: StageFilter): OrderStage {
   return stage;
 }
 
-export default function CommandCenter({ orders, accounts, buyGroups, warehouses, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, notificationSettings, workspaceMembers }: Props) {
+export default function CommandCenter({ orders, accounts, creditCards, buyGroups, warehouses, reminders, trackingChangeAlerts, deliveryBeforeTrackingAlerts, totals, userEmail, profile, activeWorkspace, workspaces, profileId, isAdmin, notificationSettings, workspaceMembers }: Props) {
   const workspaceNav = activeWorkspace.type === "OPERATOR" ? (isAdmin ? operatorAdminNav : operatorMemberNav) : personalNav;
   const isOperatorAdmin = activeWorkspace.type === "OPERATOR" && isAdmin;
   const viewMode: WorkflowViewMode = isOperatorAdmin ? "admin" : activeWorkspace.type === "PERSONAL" ? "personal" : "member";
@@ -1003,6 +1008,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
             />
           )}
           {section === "accounts" && <AccountsView accounts={accounts} orders={orders} setSelectedOrder={setSelectedOrder} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
+          {section === "creditCards" && <CreditCardsView creditCards={creditCards} orders={orders} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
           {section === "buyGroups" && <BuyGroupsView buyGroups={buyGroups} orders={orders} workspaceId={activeWorkspace.id} viewMode={viewMode} />}
           {section === "warehouses" && <WarehousesView warehouses={warehouses} orders={orders} />}
           {section === "queues" && (
@@ -1037,7 +1043,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
         </div>
       </section>
 
-      {newOrderOpen && <NewOrderModal accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} viewMode={viewMode} onClose={() => setNewOrderOpen(false)} />}
+      {newOrderOpen && <NewOrderModal accounts={accounts} creditCards={creditCards} buyGroups={buyGroups} workspaceId={activeWorkspace.id} viewMode={viewMode} onClose={() => setNewOrderOpen(false)} />}
       {inboxOpen && (
         <div className="fixed inset-0 z-40 flex justify-end bg-black/45 backdrop-blur-sm" onClick={() => setInboxOpen(false)}>
           <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-cyan/20 bg-surface p-4 shadow-neon" onClick={(event) => event.stopPropagation()}>
@@ -1057,7 +1063,7 @@ export default function CommandCenter({ orders, accounts, buyGroups, warehouses,
           </aside>
         </div>
       )}
-      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} buyGroups={buyGroups} workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} memberStatus={workspaceMembers.find((member) => member.profileId === selectedOrder.submittedByProfileId)?.status ?? null} isAdmin={isOperatorAdmin} viewMode={viewMode} onClose={() => setSelectedOrder(null)} />}
+      {selectedOrder && <OrderPanel order={selectedOrder} accounts={accounts} creditCards={creditCards} buyGroups={buyGroups} workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} memberStatus={workspaceMembers.find((member) => member.profileId === selectedOrder.submittedByProfileId)?.status ?? null} isAdmin={isOperatorAdmin} viewMode={viewMode} onClose={() => setSelectedOrder(null)} />}
     </main>
   );
 }
@@ -1639,6 +1645,11 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
   const memberOwed = order.memberPayoutAmount ?? payout.memberTotalPayout;
   const statusFields: Array<[string, string]> = viewMode === "personal" ? [
     ["Status", personalWorkflowLabel(order)],
+    ["Card", order.creditCard?.name ?? "Not selected"],
+    ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
+    ["Chase Cashback", money(financials.chaseCashback)],
+    ["Net Credit Owed", money(financials.amountOwed)],
+    ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
     ["Tracking", order.trackingNumber ?? "Missing"],
     ["Delivered", order.delivered ? "Yes" : "No"],
     ["Scanned", order.scanned ? "Yes" : "No"],
@@ -1660,6 +1671,11 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Spread", money(payout.adminTotalSpread)]
   ] : [
     ["Status", memberWorkflowLabel(order)],
+    ["Card", order.creditCard?.name ?? "Not selected"],
+    ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
+    ["Chase Cashback", money(financials.chaseCashback)],
+    ["Net Credit Owed", money(financials.amountOwed)],
+    ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
     ["Tracking", order.trackingNumber ?? "Missing"],
     ["Delivered", order.memberMarkedDelivered || order.delivered ? "Yes" : "No"],
     ["Scanned", order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned ? "Yes" : "No"],
@@ -1681,6 +1697,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       ...(memberSafe ? [] : [["Submitted by", memberName(order)], ["Member email", order.submittedBy?.email ?? "Unknown"]] as Array<[string, string]>),
       ["Qty", String(order.quantity)],
       ["Account", order.amazonAccount?.name ?? "Missing"],
+      ...(viewMode !== "admin" ? [["Card", order.creditCard?.name ?? "Not selected"]] as Array<[string, string]> : []),
       ["Group", order.buyGroup?.name ?? "Missing"],
       ["Destination", order.buyGroup?.name ?? order.warehouse?.code ?? "Missing"],
       ["Order #", order.orderNumber ?? "Missing"],
@@ -1688,6 +1705,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       [viewMode === "admin" ? "Warehouse Payout" : "Member Payout", money(viewMode === "admin" ? payout.warehousePayoutPerUnit : payout.memberPayoutPerUnit)],
       ...(viewMode === "admin" ? [["Member Payout", money(payout.memberPayoutPerUnit)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
       ["Chase Cashback", order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%`],
+      ...(viewMode !== "admin" ? [["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)], ["Net Credit Owed", money(financials.amountOwed)]] as Array<[string, string]> : []),
       ["Chase Cashback + Payout Difference", money(displayMainProfit)],
       ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
       ["Total Profit", money(displayTotalProfit)],
@@ -1994,12 +2012,12 @@ function SubmitTrackingForm({ order, viewMode }: { order: OrderWithRelations; vi
   );
 }
 
-function NewOrderModal({ accounts, buyGroups, workspaceId, viewMode, onClose }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; viewMode: WorkflowViewMode; onClose: () => void }) {
+function NewOrderModal({ accounts, creditCards, buyGroups, workspaceId, viewMode, onClose }: { accounts: AmazonAccount[]; creditCards: CreditCardModel[]; buyGroups: BuyGroup[]; workspaceId: string; viewMode: WorkflowViewMode; onClose: () => void }) {
   return (
     <Modal title="New Order" onClose={onClose}>
       <form action={createOrder} className="grid gap-4" onSubmit={() => setTimeout(onClose, 100)}>
         <input type="hidden" name="workspaceId" value={workspaceId} />
-        <OrderFields accounts={accounts} buyGroups={buyGroups} viewMode={viewMode} />
+        <OrderFields accounts={accounts} creditCards={creditCards} buyGroups={buyGroups} viewMode={viewMode} />
         <div className="flex justify-end gap-2 border-t border-line pt-4">
           <button type="button" onClick={onClose} className="rounded-lg border border-line px-3 py-2 text-sm text-muted">Cancel</button>
           <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Create Order</button>
@@ -2009,7 +2027,7 @@ function NewOrderModal({ accounts, buyGroups, workspaceId, viewMode, onClose }: 
   );
 }
 
-function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, memberStatus, isAdmin, viewMode, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; buyGroups: BuyGroup[]; workspaceId: string; workspaceName: string; memberStatus: string | null; isAdmin: boolean; viewMode: WorkflowViewMode; onClose: () => void }) {
+function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, workspaceName, memberStatus, isAdmin, viewMode, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; creditCards: CreditCardModel[]; buyGroups: BuyGroup[]; workspaceId: string; workspaceName: string; memberStatus: string | null; isAdmin: boolean; viewMode: WorkflowViewMode; onClose: () => void }) {
   const financials = calculateFinancials(order);
   const payout = calculatePayoutBreakdown(order);
   const timeline = viewMode === "personal" ? [
@@ -2040,7 +2058,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
         <form action={updateOrder} className="grid gap-4" onSubmit={() => setTimeout(onClose, 100)}>
           <input type="hidden" name="id" value={order.id} />
           <input type="hidden" name="workspaceId" value={workspaceId} />
-          <OrderFields accounts={accounts} buyGroups={buyGroups} order={order} lockTracking={isAdmin} viewMode={viewMode} />
+          <OrderFields accounts={accounts} creditCards={creditCards} buyGroups={buyGroups} order={order} lockTracking={isAdmin} viewMode={viewMode} />
           {viewMode === "admin" && (
             <div className="grid gap-3 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-2">
               <CheckField name="adminSubmittedTrackingToWarehouse" label="Submitted to warehouse" defaultChecked={order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted} />
@@ -2082,6 +2100,7 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
           <div className="rounded-lg border border-line bg-surface/60 p-4">
             <div className="mb-3 text-sm font-semibold">{viewMode === "personal" ? "Workflow" : "Submission"}</div>
             <YoungAdultBalanceBadge order={order} />
+            {viewMode !== "admin" && <Fact label="Credit card" value={order.creditCard ? cardLabel(order.creditCard) : "Not selected"} />}
             {viewMode !== "personal" && <Fact label="Submitted by" value={memberName(order)} />}
             {viewMode !== "personal" && <Fact label="Member email" value={order.submittedBy?.email ?? "Unknown"} />}
             <Fact label="Workspace" value={workspaceName} />
@@ -2112,6 +2131,9 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
           <div className="rounded-lg border border-line bg-surface/60 p-4">
             <div className="mb-3 text-sm font-semibold">Financials</div>
             {(viewMode === "personal" ? [
+              ["Credit Card", order.creditCard ? cardLabel(order.creditCard) : "Not selected"],
+              ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
+              ["Net Credit Owed", money(financials.amountOwed)],
               ["Total Paid", money(financials.totalPaid)],
               ["Payout", money(financials.totalPayout)],
               ["Payout Difference", money(financials.payoutDifference)],
@@ -2129,6 +2151,9 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
               ["Admin Spread Profit", money(payout.adminTotalSpread)],
               ["Profit Status", order.adminReceivedPayoutFromWarehouse && (order.adminPaidMember || order.memberPaid) ? "Realized" : "Unrealized"]
             ] : [
+              ["Credit Card", order.creditCard ? cardLabel(order.creditCard) : "Not selected"],
+              ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
+              ["Net Credit Owed", money(financials.amountOwed)],
               ["Member payout", money(order.memberPayoutAmount ?? payout.memberTotalPayout)],
               ["Total Paid", money(financials.totalPaid)],
               ["Payout Difference", money((order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid)],
@@ -2168,8 +2193,27 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
   );
 }
 
-function OrderFields({ accounts, buyGroups, order, lockTracking = false, viewMode }: { accounts: AmazonAccount[]; buyGroups: BuyGroup[]; order?: OrderWithRelations; lockTracking?: boolean; viewMode: WorkflowViewMode }) {
+function cashbackOptionsForCard(card: CreditCardModel | OrderWithRelations["creditCard"] | null | undefined) {
+  const fallback = [0, 5, 6, 7];
+  if (!card?.cashbackOptions) return fallback;
+  if (!Array.isArray(card.cashbackOptions)) return fallback;
+  const values = card.cashbackOptions
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
+  return Array.from(new Set(values.length > 0 ? values : fallback)).sort((a, b) => a - b);
+}
+
+function cardLabel(card: Pick<CreditCardModel, "name" | "issuer" | "last4"> | NonNullable<OrderWithRelations["creditCard"]>) {
+  return [card.name, card.issuer, card.last4 ? `•••• ${card.last4}` : null].filter(Boolean).join(" · ");
+}
+
+function OrderFields({ accounts, creditCards, buyGroups, order, lockTracking = false, viewMode }: { accounts: AmazonAccount[]; creditCards: CreditCardModel[]; buyGroups: BuyGroup[]; order?: OrderWithRelations; lockTracking?: boolean; viewMode: WorkflowViewMode }) {
   const payout = order ? calculatePayoutBreakdown(order) : null;
+  const initialCardId = order?.creditCardId ?? "";
+  const [selectedCreditCardId, setSelectedCreditCardId] = useState(initialCardId);
+  const selectedCard = creditCards.find((card) => card.id === selectedCreditCardId) ?? order?.creditCard ?? null;
+  const cashbackOptions = cashbackOptionsForCard(selectedCard);
+  const cashbackDefault = order?.chaseCashbackPercent ?? selectedCard?.defaultCashbackPercent ?? 5;
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -2181,6 +2225,14 @@ function OrderFields({ accounts, buyGroups, order, lockTracking = false, viewMod
           {accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
       </Field>
+      {viewMode !== "admin" && (
+        <Field label="Credit card used">
+          <select name="creditCardId" value={selectedCreditCardId} onChange={(event) => setSelectedCreditCardId(event.currentTarget.value)} className="w-full px-3 py-2 text-sm">
+            <option value="">No card selected</option>
+            {creditCards.map((card) => <option key={card.id} value={card.id}>{cardLabel(card)}</option>)}
+          </select>
+        </Field>
+      )}
       <Field label="Buy group / destination">
         <select name="buyGroupId" defaultValue={order?.buyGroupId ?? ""} className="w-full px-3 py-2 text-sm">
           <option value="">Select buy group / destination</option>
@@ -2201,12 +2253,12 @@ function OrderFields({ accounts, buyGroups, order, lockTracking = false, viewMod
       <Field label="Order number"><input name="orderNumber" defaultValue={order?.orderNumber ?? ""} placeholder="Ex: 114-3361283-3021808" inputMode="numeric" maxLength={19} pattern="\d{3}-\d{7}-\d{7}" title="Use the format 114-3361283-3021808" onInput={(event) => { event.currentTarget.value = formatAmazonOrderNumber(event.currentTarget.value); }} className="w-full px-3 py-2 text-sm" /></Field>
       <Field label="Tracking number"><input name="trackingNumber" defaultValue={order?.trackingNumber ?? ""} placeholder="Ex: TBA330706322941" disabled={lockTracking} onInput={(event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase(); }} className="w-full px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60" /></Field>
       <Field label="Chase cashback">
-        <select name="chaseCashbackPercent" defaultValue={order?.chaseCashbackPercent ?? 5} className="w-full px-3 py-2 text-sm">
-          {[0, 5, 6, 7].map((value) => <option key={value} value={value}>{value}%</option>)}
+        <select key={selectedCreditCardId || "no-card"} name="chaseCashbackPercent" defaultValue={cashbackOptions.includes(cashbackDefault) ? cashbackDefault : "custom"} className="w-full px-3 py-2 text-sm">
+          {cashbackOptions.map((value) => <option key={value} value={value}>{value}%</option>)}
           <option value="custom">Custom</option>
         </select>
       </Field>
-      <Field label="Custom Chase %"><input name="customChaseCashbackPercent" type="number" min="0" step="0.01" placeholder="Only if custom" className="w-full px-3 py-2 text-sm" /></Field>
+      <Field label="Custom Chase %"><input name="customChaseCashbackPercent" type="number" min="0" step="0.01" defaultValue={cashbackOptions.includes(cashbackDefault) ? "" : cashbackDefault} placeholder="Only if custom" className="w-full px-3 py-2 text-sm" /></Field>
       <Field label="Shipping type"><input name="shippingType" defaultValue={order?.shippingType ?? ""} className="w-full px-3 py-2 text-sm" /></Field>
       <div className="grid gap-3 md:col-span-2 md:grid-cols-3">
         <CheckField name="youngAdultEligible" label="Young Adult extra 5% cashback" defaultChecked={order?.youngAdultEligible ?? false} />
@@ -2273,6 +2325,216 @@ function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations
   );
 }
 
+function orderCardPaidAt(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "member") return order.memberMarkedDoneAt ?? order.profitReceivedAt ?? null;
+  return order.creditCardPaidAt ?? order.profitReceivedAt ?? null;
+}
+
+function isCardCreditOpen(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (order.youngAdultBalanceUsed) return false;
+  if (isOrderDoneForView(order, viewMode)) return false;
+  if (viewMode === "member") return !order.memberMarkedDone && !order.profitReceived;
+  return !order.creditCardPaid;
+}
+
+function cardSummary(card: CreditCardModel, orders: OrderWithRelations[], viewMode: WorkflowViewMode) {
+  const cardOrders = orders.filter((order) => order.creditCardId === card.id);
+  const activeOrders = cardOrders.filter((order) => isCardCreditOpen(order, viewMode));
+  const historicalOrders = cardOrders.filter((order) => !order.youngAdultBalanceUsed);
+  const activeGross = activeOrders.reduce((sum, order) => sum + calculateFinancials(order).totalPaid, 0);
+  const activeNet = activeOrders.reduce((sum, order) => sum + calculateFinancials(order).amountOwed, 0);
+  const currentCashback = activeOrders.reduce((sum, order) => sum + calculateFinancials(order).chaseCashback, 0);
+  const historicalGross = historicalOrders.reduce((sum, order) => sum + calculateFinancials(order).totalPaid, 0);
+  const historicalCashback = historicalOrders.reduce((sum, order) => sum + calculateFinancials(order).chaseCashback, 0);
+  const utilization = card.creditLimit > 0 ? activeGross / card.creditLimit * 100 : 0;
+  const tone = card.creditLimit > 0 && activeGross > card.creditLimit
+    ? "border-red-400/60 bg-red-500/12"
+    : utilization >= card.utilizationWarningPercent
+      ? "border-yellow-300/45 bg-yellow-500/10"
+      : "border-cyan/20 bg-panel/80";
+
+  return { cardOrders, activeOrders, activeGross, activeNet, currentCashback, historicalGross, historicalCashback, utilization, tone };
+}
+
+function creditCardSeries(card: CreditCardModel, orders: OrderWithRelations[], viewMode: WorkflowViewMode) {
+  const cardOrders = orders.filter((order) => order.creditCardId === card.id && !order.youngAdultBalanceUsed);
+  const dateKeys = Array.from(new Set(cardOrders.flatMap((order) => {
+    const keys = [new Date(order.createdAt).toISOString().slice(0, 10)];
+    const paidAt = orderCardPaidAt(order, viewMode);
+    if (paidAt) keys.push(new Date(paidAt).toISOString().slice(0, 10));
+    return keys;
+  }))).sort();
+
+  const keys = dateKeys.length > 0 ? dateKeys : [new Date().toISOString().slice(0, 10)];
+  return keys.map((key) => {
+    const dayEnd = new Date(`${key}T23:59:59.999`);
+    const gross = cardOrders.reduce((sum, order) => {
+      const createdAt = new Date(order.createdAt);
+      const paidAt = orderCardPaidAt(order, viewMode);
+      const isActiveOnDay = createdAt <= dayEnd && (!paidAt || new Date(paidAt) > dayEnd);
+      return isActiveOnDay ? sum + calculateFinancials(order).totalPaid : sum;
+    }, 0);
+    return {
+      date: key,
+      gross,
+      utilization: card.creditLimit > 0 ? gross / card.creditLimit * 100 : 0
+    };
+  });
+}
+
+function MiniLineChart({ series, valueKey, suffix = "", formatValue }: { series: Array<{ date: string; gross: number; utilization: number }>; valueKey: "gross" | "utilization"; suffix?: string; formatValue: (value: number) => string }) {
+  const max = Math.max(1, ...series.map((point) => point[valueKey]));
+  const points = series.map((point, index) => {
+    const x = series.length === 1 ? 50 : index / (series.length - 1) * 100;
+    const y = 100 - Math.min(100, point[valueKey] / max * 92);
+    return `${x},${y}`;
+  }).join(" ");
+  const first = series[0];
+  const last = series[series.length - 1];
+
+  return (
+    <div className="rounded-lg border border-line bg-surface/60 p-3">
+      <svg viewBox="0 0 100 100" className="h-28 w-full overflow-visible" role="img">
+        <polyline points={points} fill="none" stroke="currentColor" strokeWidth="2.5" className="text-cyan" vectorEffect="non-scaling-stroke" />
+        {series.map((point, index) => {
+          const x = series.length === 1 ? 50 : index / (series.length - 1) * 100;
+          const y = 100 - Math.min(100, point[valueKey] / max * 92);
+          return <circle key={`${point.date}-${index}`} cx={x} cy={y} r="2.2" className="fill-blue-200" />;
+        })}
+      </svg>
+      <div className="mt-2 flex items-center justify-between text-xs text-muted">
+        <span>{first ? new Date(`${first.date}T00:00:00`).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" }) : "No data"}</span>
+        <span className="text-white">{last ? `${formatValue(last[valueKey])}${suffix}` : "0"}</span>
+        <span>{last ? new Date(`${last.date}T00:00:00`).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" }) : "No data"}</span>
+      </div>
+    </div>
+  );
+}
+
+function CreditCardsView({ creditCards, orders, workspaceId, viewMode }: { creditCards: CreditCardModel[]; orders: OrderWithRelations[]; workspaceId: string; viewMode: WorkflowViewMode }) {
+  const [selectedCard, setSelectedCard] = useState<CreditCardModel | null>(null);
+
+  if (viewMode === "admin") {
+    return <div className="rounded-lg border border-dashed border-line p-8 text-center text-muted">Credit cards are managed by members and personal users.</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <form action={createCreditCard} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
+        <input type="hidden" name="workspaceId" value={workspaceId} />
+        <div className="mb-3 flex items-center gap-2">
+          <Plus size={17} className="text-blue-300" />
+          <h2 className="font-semibold">Add Credit Card</h2>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <input name="name" required placeholder="Card name" className="w-full px-3 py-2 text-sm" />
+          <input name="issuer" placeholder="Issuer" className="w-full px-3 py-2 text-sm" />
+          <input name="last4" placeholder="Last 4" maxLength={4} inputMode="numeric" className="w-full px-3 py-2 text-sm" />
+          <input name="creditLimit" type="number" min="0" step="0.01" placeholder="Credit limit" className="w-full px-3 py-2 text-sm" />
+          <input name="utilizationWarningPercent" type="number" min="1" max="100" step="1" defaultValue={30} aria-label="Utilization warning percent" className="w-full px-3 py-2 text-sm" />
+          <input name="defaultCashbackPercent" type="number" min="0" step="0.01" defaultValue={5} aria-label="Default cashback percent" className="w-full px-3 py-2 text-sm" />
+          <input name="cashbackOptions" defaultValue="5, 6, 7" aria-label="Cashback options" className="w-full px-3 py-2 text-sm xl:col-span-2" />
+          <button className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white">Add Card</button>
+        </div>
+      </form>
+      <SummaryGrid>
+        {creditCards.map((card) => {
+          const summary = cardSummary(card, orders, viewMode);
+          return (
+            <div key={card.id} className={cls("rounded-lg border p-4 shadow-glow", summary.tone)}>
+              <button type="button" onClick={() => setSelectedCard(card)} className="mb-3 flex w-full items-start justify-between gap-3 text-left">
+                <div>
+                  <h2 className="font-semibold text-white">{card.name}</h2>
+                  <div className="mt-1 text-xs text-muted">{[card.issuer, card.last4 ? `•••• ${card.last4}` : null].filter(Boolean).join(" · ") || "No issuer"}</div>
+                </div>
+                <CreditCardIcon size={18} className="text-muted" />
+              </button>
+              <Fact label="Active/open gross credit" value={money(summary.activeGross)} />
+              <Fact label="Active/open net credit owed" value={money(summary.activeNet)} />
+              <Fact label="Current Chase cashback" value={money(summary.currentCashback)} />
+              <Fact label="Utilization" value={`${summary.utilization.toFixed(1)}%`} />
+              <Fact label="Credit limit" value={money(card.creditLimit)} />
+              <Fact label="Warning threshold" value={`${card.utilizationWarningPercent}%`} />
+              <form action={updateCreditCard} className="mt-4 grid gap-2">
+                <input type="hidden" name="workspaceId" value={workspaceId} />
+                <input type="hidden" name="id" value={card.id} />
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input name="name" required defaultValue={card.name} className="w-full px-2 py-1.5 text-sm" />
+                  <input name="issuer" defaultValue={card.issuer ?? ""} placeholder="Issuer" className="w-full px-2 py-1.5 text-sm" />
+                  <input name="last4" defaultValue={card.last4 ?? ""} placeholder="Last 4" maxLength={4} className="w-full px-2 py-1.5 text-sm" />
+                  <input name="creditLimit" type="number" min="0" step="0.01" defaultValue={card.creditLimit} className="w-full px-2 py-1.5 text-sm" />
+                  <input name="utilizationWarningPercent" type="number" min="1" max="100" step="1" defaultValue={card.utilizationWarningPercent} className="w-full px-2 py-1.5 text-sm" />
+                  <input name="defaultCashbackPercent" type="number" min="0" step="0.01" defaultValue={card.defaultCashbackPercent} className="w-full px-2 py-1.5 text-sm" />
+                  <input name="cashbackOptions" defaultValue={cashbackOptionsForCard(card).join(", ")} className="w-full px-2 py-1.5 text-sm sm:col-span-2" />
+                </div>
+                <button className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-white">Save card</button>
+              </form>
+            </div>
+          );
+        })}
+        {creditCards.length === 0 && <div className="rounded-lg border border-dashed border-line p-8 text-muted">No credit cards yet.</div>}
+      </SummaryGrid>
+      {selectedCard && <CreditCardDetailModal card={selectedCard} orders={orders.filter((order) => order.creditCardId === selectedCard.id)} viewMode={viewMode} onClose={() => setSelectedCard(null)} />}
+    </div>
+  );
+}
+
+function CreditCardDetailModal({ card, orders, viewMode, onClose }: { card: CreditCardModel; orders: OrderWithRelations[]; viewMode: WorkflowViewMode; onClose: () => void }) {
+  const summary = cardSummary(card, orders, viewMode);
+  const payments = orders
+    .map((order) => ({ order, paidAt: orderCardPaidAt(order, viewMode), financials: calculateFinancials(order) }))
+    .filter((row) => row.paidAt)
+    .sort((a, b) => new Date(b.paidAt as Date | string).getTime() - new Date(a.paidAt as Date | string).getTime());
+  const series = creditCardSeries(card, orders, viewMode);
+
+  return (
+    <Modal title={card.name} onClose={onClose} wide>
+      <div className="grid gap-5 xl:grid-cols-[1fr_1.1fr]">
+        <section className="rounded-lg border border-line bg-surface/60 p-4">
+          <div className="mb-3 text-sm font-semibold">Card Summary</div>
+          <Fact label="Historical total credit use" value={money(summary.historicalGross)} />
+          <Fact label="Historical Chase cashback earned" value={money(summary.historicalCashback)} />
+          <Fact label="Active/open gross credit" value={money(summary.activeGross)} />
+          <Fact label="Active/open net credit owed" value={money(summary.activeNet)} />
+          <Fact label="Current open Chase cashback earned" value={money(summary.currentCashback)} />
+          <Fact label="Credit limit" value={money(card.creditLimit)} />
+          <Fact label="Utilization warning threshold" value={`${card.utilizationWarningPercent}%`} />
+          <Fact label="Current utilization" value={`${summary.utilization.toFixed(1)}%`} />
+        </section>
+        <section className="space-y-3">
+          <div>
+            <div className="mb-2 text-sm font-semibold">Credit Utilization %</div>
+            <MiniLineChart series={series} valueKey="utilization" formatValue={(value) => value.toFixed(1)} suffix="%" />
+          </div>
+          <div>
+            <div className="mb-2 text-sm font-semibold">Active/Open Gross Credit</div>
+            <MiniLineChart series={series} valueKey="gross" formatValue={(value) => money(value)} />
+          </div>
+        </section>
+        <section className="xl:col-span-2">
+          <div className="mb-3 text-sm font-semibold">Payment Log</div>
+          <div className="space-y-2">
+            {payments.map(({ order, paidAt, financials }) => (
+              <details key={order.id} className="rounded-lg border border-line bg-surface/60 p-3">
+                <summary className="cursor-pointer list-none text-sm font-medium text-white [&::-webkit-details-marker]:hidden">
+                  {order.itemName} · {money(financials.amountOwed)} · {shortDate(paidAt)}
+                </summary>
+                <div className="mt-3 grid gap-2 text-sm md:grid-cols-3">
+                  <Fact label="Order name" value={order.itemName} />
+                  <Fact label="Amount paid/net credit owed" value={money(financials.amountOwed)} />
+                  <Fact label="Date paid" value={dateTime(paidAt)} />
+                  <Fact label="Related credit card" value={cardLabel(card)} />
+                </div>
+              </details>
+            ))}
+            {payments.length === 0 && <div className="rounded-lg border border-dashed border-line p-5 text-sm text-muted">No card payments logged yet.</div>}
+          </div>
+        </section>
+      </div>
+    </Modal>
+  );
+}
+
 function AccountsView({ accounts, orders, workspaceId, viewMode }: { accounts: AmazonAccount[]; orders: OrderWithRelations[]; setSelectedOrder: (order: OrderWithRelations) => void; workspaceId: string; viewMode: WorkflowViewMode }) {
   return (
     <div className="space-y-4">
@@ -2297,7 +2559,7 @@ function AccountsView({ accounts, orders, workspaceId, viewMode }: { accounts: A
             <div key={account.id} className="rounded-lg border border-cyan/20 bg-panel/80 p-4 shadow-glow">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="font-semibold">{account.name}</h2>
-                <CreditCard size={17} className="text-muted" />
+                <CreditCardIcon size={17} className="text-muted" />
               </div>
               <SummaryFacts summary={summary} />
               <form action={setAccountDefaultDueDays} className="mt-4 flex items-center gap-2">
