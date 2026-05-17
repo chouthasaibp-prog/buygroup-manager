@@ -158,12 +158,12 @@ export default async function Home({ searchParams }: Props) {
 
         acc.totalSpent += financials.totalPaid;
         acc.totalPayout += payout.warehouseTotalPayout;
-        if (!warehousePaid) acc.warehousePayoutExpected += payout.warehouseTotalPayout;
-        if (!memberPaid) {
+        if (!adminDone && !warehousePaid) acc.warehousePayoutExpected += payout.warehouseTotalPayout;
+        if (!adminDone && !memberPaid) {
           acc.memberPayoutOwed += order.memberPayoutAmount ?? payout.memberTotalPayout;
           acc.amountOwed += order.memberPayoutAmount ?? payout.memberTotalPayout;
         }
-        if (warehousePaid && memberPaid) {
+        if (adminDone || (warehousePaid && memberPaid)) {
           acc.adminSpreadRealized += payout.adminTotalSpread;
           acc.realizedProfit += payout.adminTotalSpread;
         } else if (!adminDone) {
@@ -181,27 +181,31 @@ export default async function Home({ searchParams }: Props) {
         acc.totalSpent += financials.totalPaid;
         acc.totalPayout += payout.memberTotalPayout;
         acc.totalCashback += financials.totalCashback;
-        if (!memberPaid) {
+        if (!memberDone && !memberPaid) {
           acc.expectedMemberPayout += order.memberPayoutAmount ?? payout.memberTotalPayout;
           acc.amountOwed += order.memberPayoutAmount ?? payout.memberTotalPayout;
         }
         if (order.memberConfirmedPayment && !memberDone) acc.memberPayoutOwed += financials.amountOwed;
-        if (paymentConfirmed) acc.realizedProfit += financials.profit;
-        else if (!memberDone) acc.unrealizedProfit += financials.profit;
+        const memberTotalPayout = order.memberPayoutAmount ?? payout.memberTotalPayout;
+        const memberMainProfit = order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + memberTotalPayout - financials.totalPaid;
+        const memberProfit = memberMainProfit + financials.youngAdultProfit;
+        if (paymentConfirmed) acc.realizedProfit += memberProfit;
+        else if (!memberDone) acc.unrealizedProfit += memberProfit;
         return acc;
       }
 
+      acc.totalSpent += financials.totalPaid;
+      acc.totalCashback += financials.totalCashback;
+
       if (!order.profitReceived) {
-        acc.totalSpent += financials.totalPaid;
         acc.totalPayout += financials.totalPayout;
-        acc.warehousePayoutExpected += financials.totalPayout;
+        if (!order.paidOut) acc.warehousePayoutExpected += financials.totalPayout;
         acc.memberPayoutOwed += payout.memberTotalPayout;
         acc.expectedMemberPayout += payout.memberTotalPayout;
-        acc.totalCashback += financials.totalCashback;
-        acc.amountOwed += financials.amountOwed;
+        if (!order.creditCardPaid) acc.amountOwed += financials.amountOwed;
       }
 
-      if (order.creditCardPaid) {
+      if (order.creditCardPaid || order.profitReceived) {
         acc.realizedProfit += financials.profit;
       } else if (!order.profitReceived) {
         acc.unrealizedProfit += financials.profit;

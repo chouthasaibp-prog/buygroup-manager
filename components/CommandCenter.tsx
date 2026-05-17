@@ -248,6 +248,10 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
   const paidToMember = order.adminPaidMember || order.memberPaid;
   const normalized = label.toLowerCase();
   const memberPayout = order.memberPayoutAmount ?? payout.memberTotalPayout;
+  const displayPayout = viewMode === "member" ? memberPayout : financials.totalPayout;
+  const displayPayoutDifference = displayPayout - financials.totalPaid;
+  const displayMainProfit = order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + displayPayoutDifference;
+  const displayProfit = displayMainProfit + financials.youngAdultProfit;
   const note = order.youngAdultBalanceUsed ? "Paid with YA Balance: no new cashback/profit/credit owed counted." : undefined;
 
   if (viewMode === "admin" && (normalized.includes("spread") || normalized.includes("warehouse") || normalized.includes("member payout") || normalized.includes("owed to member") || normalized.includes("payout owed"))) {
@@ -286,21 +290,37 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
   }
 
   if (normalized.includes("profit")) {
+    if (viewMode === "admin") {
+      return {
+        subtitle: order.itemName,
+        lines: [
+          { label: "Warehouse payout", value: money(payout.warehouseTotalPayout) },
+          { label: "Member payout", value: money(order.memberPayoutAmount ?? payout.memberTotalPayout) },
+          { label: "Admin spread profit", value: `${money(payout.warehouseTotalPayout)} - ${money(order.memberPayoutAmount ?? payout.memberTotalPayout)} = ${money(payout.warehouseTotalPayout - (order.memberPayoutAmount ?? payout.memberTotalPayout))}` }
+        ],
+        formula: "Admin Profit = warehouse payout - member payout",
+        finalLabel: "Total profit",
+        finalValue: money(value ?? payout.warehouseTotalPayout - (order.memberPayoutAmount ?? payout.memberTotalPayout))
+      };
+    }
+
     return {
       subtitle: order.itemName,
       lines: [
         { label: "Retail per unit", value: money(order.retailPrice) },
         { label: "Quantity", value: String(order.quantity) },
-        { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
-        { label: viewMode === "admin" ? "Member payout" : "Payout", value: money(financials.totalPayout) },
+        { label: "Retail total", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
+        { label: viewMode === "member" ? "Member payout" : "Payout", value: money(displayPayout) },
+        { label: "Payout difference", value: `${money(displayPayout)} - ${money(financials.totalPaid)} = ${money(displayPayoutDifference)}` },
         { label: "Chase cashback", value: money(financials.chaseCashback) },
-        { label: "Young Adult cashback profit", value: money(financials.youngAdultCashback) },
-        { label: "Credit owed", value: money(financials.amountOwed) },
+        { label: "Chase Cashback + Payout Difference", value: money(displayMainProfit) },
+        { label: "Young Adult Cashback Profit", value: money(financials.youngAdultProfit) },
+        { label: "Credit owed", value: money(financials.amountOwed), muted: true },
         { label: "Profit status", value: order.creditCardPaid || order.memberConfirmedPayment || order.profitReceived ? "Realized" : "Unrealized" }
       ],
-      formula: "Profit = payout - credit owed + Young Adult cashback",
-      finalLabel: "Final profit",
-      finalValue: money(value ?? financials.profit),
+      formula: "Total Profit = Chase Cashback + Payout Difference + Young Adult Cashback Profit",
+      finalLabel: "Total profit",
+      finalValue: money(value ?? displayProfit),
       note
     };
   }
@@ -342,9 +362,9 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
     lines: [
       { label: "Retail per unit", value: money(order.retailPrice) },
       { label: "Quantity", value: String(order.quantity) },
-      { label: "Total paid", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
+      { label: "Retail total", value: `${money(order.retailPrice)} x ${order.quantity} = ${money(financials.totalPaid)}` },
       { label: "Chase cashback", value: money(financials.chaseCashback) },
-      { label: "Young Adult cashback profit", value: money(financials.youngAdultCashback) },
+      { label: "Young Adult Cashback Profit", value: money(financials.youngAdultProfit) },
       ...(order.youngAdultBalanceUsed ? [{ label: "Used YA balance adjustment", value: `-${money(financials.youngAdultBalanceApplied)}` }] : []),
       ...(viewMode === "member" ? [{ label: "Amount paid by admin / member payout", value: money(memberPayout) }] : [])
     ],
@@ -358,10 +378,10 @@ function orderFinancialBreakdown(order: OrderWithRelations, label: string, viewM
 function aggregateBreakdown(label: string, orders: OrderWithRelations[], viewMode: WorkflowViewMode, finalValue: string): CalculationBreakdown {
   const normalized = label.toLowerCase();
   const financialRows = orders.map((order) => ({ order, financials: calculateFinancials(order), payout: calculatePayoutBreakdown(order) }));
-  const openRows = financialRows.filter(({ order }) => !isOrderDoneForView(order, viewMode));
-  const memberUnpaidRows = financialRows.filter(({ order }) => !(order.adminPaidMember || order.memberPaid));
-  const realizedRows = financialRows.filter(({ order }) => viewMode === "member" ? order.memberConfirmedPayment || isMemberDone(order) : order.creditCardPaid);
-  const unrealizedRows = financialRows.filter(({ order }) => viewMode === "member" ? !(order.memberConfirmedPayment || isMemberDone(order)) : !order.creditCardPaid && !order.profitReceived);
+  const activeRows = financialRows.filter(({ order }) => !isOrderDoneForView(order, viewMode));
+  const memberUnpaidRows = financialRows.filter(({ order }) => !isOrderDoneForView(order, viewMode) && !(order.adminPaidMember || order.memberPaid));
+  const realizedRows = financialRows.filter(({ order }) => isRealizedForView(order, viewMode));
+  const unrealizedRows = financialRows.filter(({ order }) => isUnrealizedForView(order, viewMode));
   const adminSpreadRows = normalized.includes("unrealized")
     ? financialRows.filter(({ order }) => !(order.adminPaidMember || order.memberPaid || order.profitReceived))
     : normalized.includes("realized")
@@ -369,7 +389,7 @@ function aggregateBreakdown(label: string, orders: OrderWithRelations[], viewMod
       : financialRows;
   const rows = viewMode === "admin" && normalized.includes("spread")
     ? adminSpreadRows
-    : normalized.includes("unrealized") ? unrealizedRows : normalized.includes("realized") ? realizedRows : normalized.includes("amount owed to me") || normalized.includes("member payout owed") || normalized.includes("expected payout") ? memberUnpaidRows : normalized.includes("credit owed") || normalized === "amount owed" ? openRows : financialRows;
+    : normalized.includes("unrealized") ? unrealizedRows : normalized.includes("realized") ? realizedRows : normalized.includes("amount owed to me") || normalized.includes("member payout owed") || normalized.includes("expected payout") ? memberUnpaidRows : normalized.includes("credit owed") || normalized === "amount owed" ? activeRows : financialRows;
 
   if (viewMode === "admin" && (normalized.includes("spread") || normalized.includes("member payout") || normalized.includes("warehouse payout"))) {
     const warehouse = rows.reduce((sum, row) => sum + row.payout.warehouseTotalPayout, 0);
@@ -393,19 +413,23 @@ function aggregateBreakdown(label: string, orders: OrderWithRelations[], viewMod
   const yaCashback = rows.reduce((sum, row) => sum + row.financials.youngAdultCashback, 0);
   const creditOwed = rows.reduce((sum, row) => sum + row.financials.amountOwed, 0);
   const payout = rows.reduce((sum, row) => sum + (viewMode === "member" ? row.order.memberPayoutAmount ?? row.payout.memberTotalPayout : row.financials.totalPayout), 0);
+  const payoutDifference = rows.reduce((sum, row) => sum + (viewMode === "member" ? (row.order.memberPayoutAmount ?? row.payout.memberTotalPayout) - row.financials.totalPaid : row.financials.payoutDifference), 0);
+  const mainProfit = rows.reduce((sum, row) => sum + (viewMode === "member" ? row.order.youngAdultBalanceUsed ? 0 : row.financials.chaseCashback + (row.order.memberPayoutAmount ?? row.payout.memberTotalPayout) - row.financials.totalPaid : row.financials.mainProfit), 0);
   const yaBalance = rows.reduce((sum, row) => sum + row.financials.youngAdultBalanceApplied, 0);
 
   return {
     subtitle: `${rows.length} ${rows.length === 1 ? "order" : "orders"}`,
     lines: [
       { label: "Retail total", value: money(totalPaid) },
+      ...(normalized.includes("profit") ? [{ label: viewMode === "member" ? "Member payout" : "Payout", value: money(payout) }] : []),
+      ...(normalized.includes("profit") ? [{ label: "Payout difference", value: money(payoutDifference) }] : []),
       { label: "Chase cashback", value: money(cashback) },
-      { label: "Young Adult cashback profit", value: money(yaCashback) },
+      ...(normalized.includes("profit") ? [{ label: "Chase Cashback + Payout Difference", value: money(mainProfit) }] : []),
+      { label: "Young Adult Cashback Profit", value: money(yaCashback) },
       ...(yaBalance > 0 ? [{ label: "Used YA balance adjustment", value: `-${money(yaBalance)}` }] : []),
-      ...(normalized.includes("payout") || normalized.includes("owed to me") || normalized.includes("profit") ? [{ label: viewMode === "member" ? "Member payout" : "Payout", value: money(payout) }] : []),
-      ...(normalized.includes("profit") || normalized.includes("credit") || normalized.includes("owed") ? [{ label: "Credit owed", value: money(creditOwed) }] : [])
+      ...(normalized.includes("profit") || normalized.includes("credit") || normalized.includes("owed") ? [{ label: "Credit owed", value: money(creditOwed), muted: normalized.includes("profit") }] : [])
     ],
-    formula: normalized.includes("profit") ? "Profit = payout - credit owed + Young Adult cashback" : normalized.includes("cashback") ? "Total cashback = Chase cashback + Young Adult cashback" : normalized.includes("total spent") ? "Total spent = sum of retail per unit x quantity" : normalized.includes("payout") || normalized.includes("owed to me") ? "Member payout = sum of member payout amounts" : "Credit owed = total retail - Chase cashback",
+    formula: normalized.includes("profit") ? "Total Profit = Chase Cashback + Payout Difference + Young Adult Cashback Profit" : normalized.includes("cashback") ? "Total cashback = Chase cashback + Young Adult cashback" : normalized.includes("total spent") ? "Total spent = sum of retail per unit x quantity" : normalized.includes("payout") || normalized.includes("owed to me") ? "Member payout = sum of member payout amounts" : "Credit owed = total retail - Chase cashback",
     finalLabel: label,
     finalValue,
     note: yaBalance > 0 ? "Paid with YA Balance: no new cashback/profit/credit owed counted." : normalized.includes("credit") || normalized.includes("owed") ? "Young Adult cashback is profit only, not a credit reduction." : undefined
@@ -1073,11 +1097,12 @@ function Dashboard({ orders, buyGroups, reminders, trackingChangeAlerts, deliver
 
       acc.totalSpent += financials.totalPaid;
       acc.totalCashback += financials.totalCashback;
-      if (!(order.adminPaidMember || order.memberPaid)) acc.expectedMemberPayout += order.memberPayoutAmount ?? payout.memberTotalPayout;
-      if (!(order.adminPaidMember || order.memberPaid)) acc.amountOwedToMe += order.memberPayoutAmount ?? payout.memberTotalPayout;
+      if (!done && !(order.adminPaidMember || order.memberPaid)) acc.expectedMemberPayout += order.memberPayoutAmount ?? payout.memberTotalPayout;
+      if (!done && !(order.adminPaidMember || order.memberPaid)) acc.amountOwedToMe += order.memberPayoutAmount ?? payout.memberTotalPayout;
       if (order.memberConfirmedPayment && !done) acc.creditOwed += financials.amountOwed;
-      if (paymentConfirmed) acc.realizedProfit += financials.profit;
-      else acc.unrealizedProfit += financials.profit;
+      const memberTotalProfit = (order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + (order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid) + financials.youngAdultProfit;
+      if (paymentConfirmed) acc.realizedProfit += memberTotalProfit;
+      else acc.unrealizedProfit += memberTotalProfit;
 
       return acc;
     },
@@ -1598,6 +1623,12 @@ function OrdersView({ orders, reminders, trackingChangeAlerts, deliveryBeforeTra
 function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, viewMode = "member", memberSafe = false, selected = false, onSelect }: { order: OrderWithRelations; alerts?: OrderCardAlert[]; stage: StageFilter; onOpen: () => void; isAdmin?: boolean; viewMode?: WorkflowViewMode; memberSafe?: boolean; selected?: boolean; onSelect?: (selected: boolean) => void }) {
   const financials = calculateFinancials(order);
   const payout = calculatePayoutBreakdown(order);
+  const memberDisplayPayout = order.memberPayoutAmount ?? payout.memberTotalPayout;
+  const memberDisplayPayoutDifference = memberDisplayPayout - financials.totalPaid;
+  const memberDisplayMainProfit = order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + memberDisplayPayoutDifference;
+  const memberDisplayTotalProfit = memberDisplayMainProfit + financials.youngAdultProfit;
+  const displayMainProfit = viewMode === "member" ? memberDisplayMainProfit : financials.mainProfit;
+  const displayTotalProfit = viewMode === "member" ? memberDisplayTotalProfit : financials.profit;
   const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
   const workflowSteps = buildWorkflowSteps(order, viewMode);
   const memberOwed = order.memberPayoutAmount ?? payout.memberTotalPayout;
@@ -1651,8 +1682,10 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       ["Retail", money(order.retailPrice)],
       [viewMode === "admin" ? "Warehouse Payout" : "Member Payout", money(viewMode === "admin" ? payout.warehousePayoutPerUnit : payout.memberPayoutPerUnit)],
       ...(viewMode === "admin" ? [["Member Payout", money(payout.memberPayoutPerUnit)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
-      ["Cashback", order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%`],
-      ["Est. Profit", money(financials.profit)],
+      ["Chase Cashback", order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%`],
+      ["Chase Cashback + Payout Difference", money(displayMainProfit)],
+      ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
+      ["Total Profit", money(displayTotalProfit)],
       ["Created", shortDate(order.createdAt)]
     ],
     TRACKING_READY: [
@@ -1685,18 +1718,18 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     PAID_OUT: [
       ["Paid Out from Warehouse", shortDate(order.paidOutAt)],
       ["Amount Owed", money(financials.amountOwed)],
-      ["Unrealized Profit", money(financials.profit)],
+      ["Unrealized Profit", money(displayTotalProfit)],
       ...(viewMode === "admin" ? [["Warehouse Payout", money(payout.warehouseTotalPayout)], ["Member Payout", money(payout.memberTotalPayout)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
       ["Account", order.amazonAccount?.name ?? "Missing"],
       ["Card", order.creditCardPaid ? "Paid" : "Open"]
     ],
     CREDIT_PAID: [
       ["Card Paid", shortDate(order.creditCardPaidAt)],
-      ["Realized Profit", money(financials.profit)],
+      ["Realized Profit", money(displayTotalProfit)],
       ["Done", order.profitReceived ? "Yes" : "No"]
     ],
     PROFIT_RECEIVED: [
-      ["Realized Profit", money(financials.profit)],
+      ["Realized Profit", money(displayTotalProfit)],
       ["Total Paid", money(financials.totalPaid)],
       ["Member Payout", money(payout.memberTotalPayout)],
       ["Done", shortDate(order.profitReceivedAt)],
@@ -2075,33 +2108,31 @@ function OrderPanel({ order, accounts, buyGroups, workspaceId, workspaceName, me
             <div className="mb-3 text-sm font-semibold">Financials</div>
             {(viewMode === "personal" ? [
               ["Total Paid", money(financials.totalPaid)],
-              ["Member Payout", money(payout.memberTotalPayout)],
+              ["Payout", money(financials.totalPayout)],
+              ["Payout Difference", money(financials.payoutDifference)],
               ["Chase Cashback", money(financials.chaseCashback)],
-              ["Young Adult Cashback", money(financials.youngAdultCashback)],
+              ["Chase Cashback + Payout Difference", money(financials.mainProfit)],
+              ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
               ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Amount Owed", money(financials.amountOwed)],
-              ["Estimated Profit", money(financials.profit)],
+              ["Total Profit", money(financials.profit)],
               ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
             ] : isAdmin ? [
               ["Total Paid", money(financials.totalPaid)],
               ["Warehouse Payout", money(payout.warehouseTotalPayout)],
               ["Member Payout", money(payout.memberTotalPayout)],
-              ["Admin Spread", money(payout.adminTotalSpread)],
-              ["Chase Cashback", money(financials.chaseCashback)],
-              ["Young Adult Cashback", money(financials.youngAdultCashback)],
-              ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
-              ["Total Cashback", money(financials.totalCashback)],
-              ["Credit / Amount Owed", money(financials.amountOwed)],
-              ["Estimated Profit", money(financials.profit)],
-              ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
+              ["Admin Spread Profit", money(payout.adminTotalSpread)],
+              ["Profit Status", order.adminReceivedPayoutFromWarehouse && (order.adminPaidMember || order.memberPaid) ? "Realized" : "Unrealized"]
             ] : [
               ["Member payout", money(order.memberPayoutAmount ?? payout.memberTotalPayout)],
               ["Total Paid", money(financials.totalPaid)],
-              ["Total Cashback", money(financials.totalCashback)],
-              ["Young Adult Cashback", money(financials.youngAdultCashback)],
+              ["Payout Difference", money((order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid)],
+              ["Chase Cashback", money(financials.chaseCashback)],
+              ["Chase Cashback + Payout Difference", money(order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + (order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid)],
+              ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
               ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
               ["Credit / Amount Owed", money(financials.amountOwed)],
-              ["Estimated Profit", money(financials.profit)],
+              ["Total Profit", money((order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + (order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid) + financials.youngAdultProfit)],
               ["Payment status", order.memberConfirmedPayment ? "Payment confirmed / credit owed" : order.adminPaidMember || order.memberPaid ? "Payment sent" : "Open"]
             ]).map(([label, value]) => <Fact key={label} label={label} value={orderCalculationValue(order, label, value, viewMode)} />)}
           </div>
@@ -2194,10 +2225,10 @@ function creditStatus(order: OrderWithRelations, viewMode: WorkflowViewMode) {
 function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations[]; viewMode: WorkflowViewMode }) {
   const rows = orders
     .filter((order) => viewMode === "personal"
-      ? order.paidOut && !order.creditCardPaid
+      ? !isPersonalDone(order) && order.paidOut && !order.creditCardPaid
       : viewMode === "member"
         ? order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived)
-        : !(order.adminPaidMember || order.memberPaid)
+        : !isAdminDone(order) && !(order.adminPaidMember || order.memberPaid)
     )
     .map((order) => ({ order, financials: calculateFinancials(order), payout: calculatePayoutBreakdown(order) }));
   const totalOwed = rows.reduce((sum, item) => sum + (viewMode === "admin" ? item.order.memberPayoutAmount ?? item.payout.memberTotalPayout : item.financials.amountOwed), 0);
@@ -2300,7 +2331,7 @@ function BuyGroupsView({ buyGroups, orders, workspaceId, viewMode }: { buyGroups
             <div key={group.id} className="rounded-lg border border-blue-400/20 bg-panel/80 p-4 shadow-glow">
               <h2 className="mb-3 font-semibold">{group.name}</h2>
               <SummaryFacts summary={summary} />
-              <Fact label="Delivered unpaid" value={String(groupOrders.filter((order) => order.delivered && !order.paidOut).length)} />
+              <Fact label="Delivered unpaid" value={String(groupOrders.filter((order) => !isOrderDoneForView(order, viewMode) && order.delivered && !order.paidOut).length)} />
               <Fact label="Avg payout time" value={averageDays(groupOrders, "deliveredAt", "paidOutAt")} />
             </div>
           );
@@ -2412,8 +2443,8 @@ function MembersView({ activeWorkspace, orders, workspaceMembers, profileId }: {
 
 function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWorkspace: WorkspaceSwitcherItem }) {
   const members = groupOrdersByMember(orders);
-  const openOrders = orders.filter((order) => !(order.adminPaidMember || order.memberPaid));
-  const paidOrders = orders.filter((order) => order.adminPaidMember || order.memberPaid);
+  const openOrders = orders.filter((order) => !isAdminDone(order) && !(order.adminPaidMember || order.memberPaid));
+  const paidOrders = orders.filter((order) => order.adminPaidMember || order.memberPaid || isAdminDone(order));
   const totalOwed = openOrders.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), 0);
   const totalPaid = paidOrders.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), 0);
 
@@ -2439,7 +2470,7 @@ function MemberPayoutsView({ orders }: { orders: OrderWithRelations[]; activeWor
               <div className="mt-1 text-xs text-muted">{member.orders.length} {member.orders.length === 1 ? "order" : "orders"}</div>
             </div>
             <div className="flex flex-wrap justify-end gap-2 text-right text-sm">
-              <span className="rounded-md border border-green-300/25 bg-green-500/10 px-2.5 py-1.5 text-green-100">Owed <CalculationLink value={money(member.unpaid)} breakdown={aggregateBreakdown("Member Payout Owed", member.orders.filter((order) => !(order.adminPaidMember || order.memberPaid)), "admin", money(member.unpaid))} /></span>
+              <span className="rounded-md border border-green-300/25 bg-green-500/10 px-2.5 py-1.5 text-green-100">Owed <CalculationLink value={money(member.unpaid)} breakdown={aggregateBreakdown("Member Payout Owed", member.orders.filter((order) => !isAdminDone(order) && !(order.adminPaidMember || order.memberPaid)), "admin", money(member.unpaid))} /></span>
               <span className="rounded-md border border-line px-2.5 py-1.5 text-muted">Paid <CalculationLink value={money(member.paid)} breakdown={aggregateBreakdown("Member Payout Paid", member.orders.filter((order) => order.adminPaidMember || order.memberPaid), "admin", money(member.paid))} /></span>
             </div>
           </div>
@@ -2498,9 +2529,9 @@ function TrackingNeededView({ orders }: { orders: OrderWithRelations[] }) {
 }
 
 function MyPayoutsView({ orders }: { orders: OrderWithRelations[] }) {
-  const unpaid = orders.filter((order) => !(order.adminPaidMember || order.memberPaid));
-  const paymentSent = orders.filter((order) => (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment);
-  const confirmed = orders.filter((order) => order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived));
+  const unpaid = orders.filter((order) => !isMemberDone(order) && !(order.adminPaidMember || order.memberPaid));
+  const paymentSent = orders.filter((order) => !isMemberDone(order) && (order.adminPaidMember || order.memberPaid) && !order.memberConfirmedPayment);
+  const confirmed = orders.filter((order) => !isMemberDone(order) && order.memberConfirmedPayment);
   const done = orders.filter((order) => order.memberMarkedDone || order.profitReceived);
   const amountOwedToMe = unpaid.reduce((sum, order) => sum + (order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout), 0);
   return (
@@ -2559,7 +2590,7 @@ function groupOrdersByMember(orders: OrderWithRelations[]) {
     const existing = map.get(id) ?? { id, name, orders: [], unpaid: 0, paid: 0 };
     const amount = order.memberPayoutAmount ?? calculatePayoutBreakdown(order).memberTotalPayout;
     existing.orders.push(order);
-    if (order.adminPaidMember || order.memberPaid) existing.paid += amount;
+    if (order.adminPaidMember || order.memberPaid || isAdminDone(order)) existing.paid += amount;
     else existing.unpaid += amount;
     map.set(id, existing);
   }
@@ -2657,10 +2688,10 @@ function AnalyticsView({ orders, viewMode }: { orders: OrderWithRelations[]; vie
 
 function ImportExportView({ orders }: { orders: OrderWithRelations[] }) {
   const csv = useMemo(() => {
-    const header = ["item", "quantity", "account", "buy_group_destination", "order_number", "tracking", "stage", "total_paid", "total_payout", "young_adult_cashback", "young_adult_balance_used", "amount_owed", "estimated_profit", "profit_status"];
+    const header = ["item", "quantity", "account", "buy_group_destination", "order_number", "tracking", "stage", "total_paid", "total_payout", "payout_difference", "chase_cashback", "main_profit", "young_adult_cashback_profit", "young_adult_balance_used", "credit_owed", "total_profit", "profit_status"];
     const rows = orders.map((order) => {
       const financials = calculateFinancials(order);
-      return [order.itemName, order.quantity, order.amazonAccount?.name ?? "", order.buyGroup?.name ?? order.warehouse?.name ?? "", order.orderNumber ?? "", order.trackingNumber ?? "", order.currentStage, financials.totalPaid, financials.totalPayout, financials.youngAdultCashback, financials.youngAdultBalanceApplied, financials.amountOwed, financials.profit, order.creditCardPaid ? "realized" : "unrealized"];
+      return [order.itemName, order.quantity, order.amazonAccount?.name ?? "", order.buyGroup?.name ?? order.warehouse?.name ?? "", order.orderNumber ?? "", order.trackingNumber ?? "", order.currentStage, financials.totalPaid, financials.totalPayout, financials.payoutDifference, financials.chaseCashback, financials.mainProfit, financials.youngAdultProfit, financials.youngAdultBalanceApplied, financials.amountOwed, financials.profit, order.creditCardPaid ? "realized" : "unrealized"];
     });
     return [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
   }, [orders]);
@@ -2692,9 +2723,9 @@ function orderProfitForView(order: OrderWithRelations, viewMode: WorkflowViewMod
 }
 
 function isRealizedForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
-  if (viewMode === "admin") return (order.adminReceivedPayoutFromWarehouse || order.paidOut) && (order.adminPaidMember || order.memberPaid);
+  if (viewMode === "admin") return isAdminDone(order) || ((order.adminReceivedPayoutFromWarehouse || order.paidOut) && (order.adminPaidMember || order.memberPaid));
   if (viewMode === "member") return order.memberConfirmedPayment || order.memberMarkedDone || order.profitReceived;
-  return order.creditCardPaid;
+  return order.creditCardPaid || order.profitReceived;
 }
 
 function isUnrealizedForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
@@ -2955,20 +2986,31 @@ function summarize(orders: OrderWithRelations[], viewMode: WorkflowViewMode = "p
     (acc, order) => {
       const financials = calculateFinancials(order);
       const payout = calculatePayoutBreakdown(order);
+      const done = isOrderDoneForView(order, viewMode);
       acc.totalOrders += 1;
-      if (!isOrderDoneForView(order, viewMode)) acc.openOrders += 1;
+      if (!done) acc.openOrders += 1;
       acc.totalSpent += financials.totalPaid;
-      acc.totalPayout += viewMode === "admin" ? payout.warehouseTotalPayout : financials.totalPayout;
       acc.totalCashback += viewMode === "admin" ? 0 : financials.totalCashback;
-      acc.amountOwed += viewMode === "admin" ? order.memberPayoutAmount ?? payout.memberTotalPayout : financials.amountOwed;
+      if (!done) {
+        if (viewMode === "admin") {
+          if (!(order.adminReceivedPayoutFromWarehouse || order.paidOut)) acc.totalPayout += payout.warehouseTotalPayout;
+          if (!(order.adminPaidMember || order.memberPaid)) acc.amountOwed += order.memberPayoutAmount ?? payout.memberTotalPayout;
+        } else if (viewMode === "member") {
+          if (!(order.adminPaidMember || order.memberPaid)) acc.totalPayout += order.memberPayoutAmount ?? payout.memberTotalPayout;
+          if (order.memberConfirmedPayment) acc.amountOwed += financials.amountOwed;
+        } else {
+          if (!order.paidOut) acc.totalPayout += financials.totalPayout;
+          if (!order.creditCardPaid) acc.amountOwed += financials.amountOwed;
+        }
+      }
       if (isRealizedForView(order, viewMode)) acc.realizedProfit += orderProfitForView(order, viewMode);
       if (isUnrealizedForView(order, viewMode)) acc.unrealizedProfit += orderProfitForView(order, viewMode);
-      if (viewMode === "admin") {
+      if (!done && viewMode === "admin") {
         if (!(order.adminPaidMember || order.memberPaid)) acc.unpaidCard += order.memberPayoutAmount ?? payout.memberTotalPayout;
-      } else if ((viewMode === "member" ? order.memberConfirmedPayment : order.paidOut) && !isOrderDoneForView(order, viewMode)) {
+      } else if (!done && (viewMode === "member" ? order.memberConfirmedPayment : order.paidOut)) {
         acc.unpaidCard += financials.amountOwed;
       }
-      if ((order.trackingNumber && !order.trackingSubmitted) || (order.delivered && !order.paidOut) || (order.paidOut && !order.creditCardPaid)) acc.needsAction += 1;
+      if (!done && ((order.trackingNumber && !order.trackingSubmitted) || (order.delivered && !order.paidOut) || (order.paidOut && !order.creditCardPaid))) acc.needsAction += 1;
       return acc;
     },
     { totalOrders: 0, openOrders: 0, totalSpent: 0, totalPayout: 0, totalCashback: 0, amountOwed: 0, realizedProfit: 0, unrealizedProfit: 0, unpaidCard: 0, needsAction: 0 }

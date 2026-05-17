@@ -34,10 +34,13 @@ export type OrderWithRelations = Order & {
 export type Financials = {
   totalPaid: number;
   totalPayout: number;
+  payoutDifference: number;
   chaseCashback: number;
   youngAdultCashback: number;
   youngAdultBalanceApplied: number;
   totalCashback: number;
+  mainProfit: number;
+  youngAdultProfit: number;
   amountOwed: number;
   profit: number;
 };
@@ -77,14 +80,17 @@ export function calculatePayoutBreakdown(order: PayoutFields): PayoutBreakdown {
 export function calculateFinancials(order: Pick<Order, "retailPrice" | "quantity" | "payoutPerUnit" | "chaseCashbackPercent" | "youngAdultEligible"> & { youngAdultBalanceUsed?: boolean; memberPayoutPerUnit?: number | null; memberTotalPayout?: number | null }): Financials {
   const totalPaid = order.retailPrice * order.quantity;
   const totalPayout = order.memberTotalPayout ?? (order.memberPayoutPerUnit ?? order.payoutPerUnit) * order.quantity;
+  const payoutDifference = totalPayout - totalPaid;
   const youngAdultBalanceApplied = order.youngAdultBalanceUsed ? totalPaid : 0;
   const chaseCashback = order.youngAdultBalanceUsed ? 0 : totalPaid * (order.chaseCashbackPercent / 100);
   const youngAdultCashback = order.youngAdultBalanceUsed || !order.youngAdultEligible ? 0 : totalPaid * 0.05;
   const totalCashback = chaseCashback + youngAdultCashback;
+  const mainProfit = order.youngAdultBalanceUsed ? 0 : chaseCashback + payoutDifference;
+  const youngAdultProfit = youngAdultCashback;
   const amountOwed = order.youngAdultBalanceUsed ? 0 : Math.max(0, totalPaid - chaseCashback);
-  const profit = order.youngAdultBalanceUsed ? 0 : totalPayout - amountOwed + youngAdultCashback;
+  const profit = mainProfit + youngAdultProfit;
 
-  return { totalPaid, totalPayout, chaseCashback, youngAdultCashback, youngAdultBalanceApplied, totalCashback, amountOwed, profit };
+  return { totalPaid, totalPayout, payoutDifference, chaseCashback, youngAdultCashback, youngAdultBalanceApplied, totalCashback, mainProfit, youngAdultProfit, amountOwed, profit };
 }
 
 type StageFields = Pick<Order,
