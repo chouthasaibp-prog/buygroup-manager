@@ -124,6 +124,8 @@ export default async function Home({ searchParams }: Props) {
     adminSubmittedTrackingToBuyGroupAt: null,
     adminSubmittedTrackingToWarehouse: false,
     adminSubmittedTrackingToWarehouseAt: null,
+    adminCommittedToWarehouse: false,
+    adminCommittedToWarehouseAt: null,
     warehouseScanned: order.adminMarkedScannedByWarehouse || order.warehouseScanned,
     warehouseScannedAt: order.adminMarkedScannedByWarehouse || order.warehouseScanned ? order.adminMarkedScannedByWarehouseAt ?? order.warehouseScannedAt ?? order.scannedAt : null,
     adminMarkedScannedByWarehouse: order.adminMarkedScannedByWarehouse || order.warehouseScanned,

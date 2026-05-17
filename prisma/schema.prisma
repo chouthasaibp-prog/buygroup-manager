@@ -197,12 +197,14 @@ model Order {
   orderNumber                        String?
   trackingNumber                     String?
   trackingSubmitted                  Boolean        @default(false)
+  committedToWarehouse               Boolean        @default(false)
   delivered                          Boolean        @default(false)
   scanned                            Boolean        @default(false)
   paidOut                            Boolean        @default(false)
   creditCardPaid                     Boolean        @default(false)
   profitReceived                     Boolean        @default(false)
   memberSubmittedTrackingToAdmin     Boolean        @default(false)
+  adminCommittedToWarehouse          Boolean        @default(false)
   adminSubmittedTrackingToWarehouse  Boolean        @default(false)
   memberMarkedDelivered              Boolean        @default(false)
   adminMarkedScannedByWarehouse      Boolean        @default(false)
@@ -214,6 +216,7 @@ model Order {
   payoutReminderSnoozedAt            DateTime?
   createdAt                          DateTime       @default(now())
   trackingAddedAt                    DateTime?
+  committedToWarehouseAt             DateTime?
   trackingSubmittedAt                DateTime?
   deliveredAt                        DateTime?
   scannedAt                          DateTime?
@@ -221,6 +224,7 @@ model Order {
   creditCardPaidAt                   DateTime?
   profitReceivedAt                   DateTime?
   memberSubmittedTrackingToAdminAt   DateTime?
+  adminCommittedToWarehouseAt        DateTime?
   adminSubmittedTrackingToWarehouseAt DateTime?
   memberMarkedDeliveredAt            DateTime?
   adminMarkedScannedByWarehouseAt    DateTime?

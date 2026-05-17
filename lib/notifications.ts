@@ -130,8 +130,9 @@ function relevantDateFor(reminder: Reminder, mode: "personal" | "member" | "admi
   return ["Relevant date", null];
 }
 
-function reminderSubject(reminder: Reminder) {
+function reminderSubject(reminder: Reminder, mode: "personal" | "member" | "admin" = "personal") {
   const item = reminder.order.itemName;
+  if (reminder.type === "commit_warehouse" && mode === "admin") return `Urgent: commit member order to warehouse: ${item}`;
   if (reminder.type === "commit_warehouse") return `Commit item to warehouse: ${item}`;
   if (reminder.type === "submit_tracking") return `Tracking needed: ${item}`;
   if (reminder.type === "check_delivery") return `Delivery check: ${item}`;
@@ -146,6 +147,24 @@ function reminderMessage(reminder: Reminder, mode: "personal" | "member" | "admi
   const financials = calculateFinancials(order);
   const payout = payoutForReminder(order, mode);
   const [dateLabel, relevantDate] = relevantDateFor(reminder, mode);
+  if (mode === "admin" && reminder.type === "commit_warehouse") {
+    const payoutBreakdown = calculatePayoutBreakdown(order);
+    return [
+      `Member: ${order.submittedBy ? [order.submittedBy.firstName, order.submittedBy.lastName].filter(Boolean).join(" ").trim() || order.submittedBy.name || order.submittedBy.email : "Unknown member"}`,
+      `Member email: ${order.submittedBy?.email ?? "Unknown"}`,
+      `Item: ${order.itemName}`,
+      `Quantity: ${order.quantity}`,
+      `Retail: ${money(financials.totalPaid)} total / ${money(order.retailPrice)} per unit`,
+      `Member payout: ${money(payoutBreakdown.memberTotalPayout)} total / ${money(payoutBreakdown.memberPayoutPerUnit)} per unit`,
+      `Warehouse payout: ${money(payoutBreakdown.warehouseTotalPayout)} total / ${money(payoutBreakdown.warehousePayoutPerUnit)} per unit`,
+      `Admin spread: ${money(payoutBreakdown.adminTotalSpread)}`,
+      `Buy group: ${destinationName(order)}`,
+      `Amazon account: ${order.amazonAccount?.name ?? "Not selected"}`,
+      `Order #: ${order.orderNumber ?? "Not provided"}`,
+      `Created: ${dateTime(order.createdAt)}`,
+      "Action needed: Commit this member order to the warehouse/buy group"
+    ].join("\n");
+  }
   const lines = [
     `Item: ${order.itemName}`,
     `Quantity: ${order.quantity}`,
@@ -165,6 +184,9 @@ function reminderMessage(reminder: Reminder, mode: "personal" | "member" | "admi
   if (reminder.type === "pay_credit_card") {
     lines.splice(1, 0, `Credit owed: ${money(financials.amountOwed)}`);
   }
+  if (reminder.type === "commit_warehouse") {
+    lines.push("Action needed: Commit this item to the warehouse/buy group");
+  }
   if (reminder.notes) lines.push(`Note: ${reminder.notes}`);
 
   return lines.join("\n");
@@ -178,7 +200,7 @@ function isDoneForMode(order: OrderForNotifications, mode: "personal" | "member"
 
 function reminderCadenceHours(reminder: Reminder, mode: "personal" | "member" | "admin") {
   if (mode !== "personal") return null;
-  if (reminder.type === "commit_warehouse") return 0;
+  if (reminder.type === "commit_warehouse") return 6;
   if (reminder.type === "submit_tracking") return 18;
   if (reminder.type === "check_delivery") return 18;
   if (reminder.type === "check_scan") return 12;
@@ -227,7 +249,7 @@ async function resolveFixedReminderStates(order: OrderForNotifications) {
     order.amazonAccount ? "missing_amazon_account" : null,
     order.buyGroup || order.warehouse ? "missing_buy_group" : null,
     order.trackingNumber ? "submit_tracking" : null,
-    order.trackingSubmitted || order.trackingNumber ? "commit_warehouse" : null,
+    order.committedToWarehouse || order.committedToWarehouseAt || order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt ? "commit_warehouse" : null,
     order.delivered ? "check_delivery" : null,
     order.scanned ? "check_scan" : null,
     order.adminReceivedPayoutFromWarehouse || order.paidOut ? "check_payout" : null,
@@ -254,7 +276,7 @@ async function notifyRemindersForRecipient(recipient: MemberWithProfile, orders:
       workspaceId: recipient.workspaceId,
       orderId: reminder.order.id,
       type: reminder.type,
-      title: reminderSubject(reminder),
+      title: reminderSubject(reminder, mode),
       message: reminderMessage(reminder, mode),
       severity: severityFor(reminder),
       channels: channelsForMember(recipient)
@@ -323,7 +345,7 @@ export async function sendImmediatePersonalWorkflowNotifications({
       workspaceId: recipient.workspaceId,
       orderId: reminder.order.id,
       type: reminder.type,
-      title: reminderSubject(reminder),
+      title: reminderSubject(reminder, "personal"),
       message: reminderMessage(reminder, "personal"),
       severity: severityFor(reminder),
       channels: channelsForMember(recipient)
@@ -331,6 +353,54 @@ export async function sendImmediatePersonalWorkflowNotifications({
     await markReminderSent(reminder, now);
     sent += 1;
   }
+  return sent;
+}
+
+export async function sendImmediateAdminCommitNotifications({
+  workspaceId,
+  orderId,
+  now = new Date()
+}: {
+  workspaceId: string;
+  orderId: string;
+  now?: Date;
+}) {
+  const [recipients, order] = await Promise.all([
+    prisma.workspaceMember.findMany({
+      where: {
+        workspaceId,
+        status: "ACTIVE",
+        reminderNotificationsEnabled: true,
+        role: { in: ["OWNER", "ADMIN"] }
+      },
+      include: { profile: true, workspace: true }
+    }),
+    prisma.order.findFirst({
+      where: { id: orderId, workspaceId },
+      include: reminderIncludes
+    })
+  ]);
+  if (!order || order.workspace?.type !== "OPERATOR" || isDoneForMode(order as OrderForNotifications, "admin")) return 0;
+  const reminders = buildReminders([order as OrderForNotifications], now, "admin").filter((reminder) => reminder.type === "commit_warehouse");
+  if (reminders.length === 0) return 0;
+  let sent = 0;
+  for (const recipient of recipients) {
+    for (const reminder of reminders) {
+      if (await recentlySent(reminder.order.id, reminder.type, now)) continue;
+      await sendNotification({
+        userId: recipient.profileId,
+        workspaceId: recipient.workspaceId,
+        orderId: reminder.order.id,
+        type: reminder.type,
+        title: reminderSubject(reminder, "admin"),
+        message: reminderMessage(reminder, "admin"),
+        severity: severityFor(reminder),
+        channels: channelsForMember(recipient)
+      });
+      sent += 1;
+    }
+  }
+  if (sent > 0) await markReminderSent(reminders[0], now);
   return sent;
 }
 

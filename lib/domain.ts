@@ -192,7 +192,7 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date(), v
     if (done) continue;
 
     if (viewMode === "personal") {
-      if (!reminderHidden(order, "commit_warehouse", now)) {
+      if (!(order.committedToWarehouse || order.committedToWarehouseAt) && !reminderHidden(order, "commit_warehouse", now)) {
         reminders.push({
           id: `${order.id}:commit-warehouse`,
           type: "commit_warehouse",
@@ -200,11 +200,12 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date(), v
           dueDate: order.createdAt,
           order,
           severity: severityFor(order.createdAt),
+          priority: "high",
           action: "Commit item to warehouse"
         });
       }
 
-      if (!(order.trackingSubmitted || order.trackingNumber) && !reminderHidden(order, "submit_tracking", now)) {
+      if ((order.committedToWarehouse || order.committedToWarehouseAt) && !(order.trackingSubmitted || order.trackingNumber) && !reminderHidden(order, "submit_tracking", now)) {
         reminders.push({
           id: `${order.id}:tracking-check`,
           type: "submit_tracking",
@@ -241,6 +242,19 @@ export function buildReminders(orders: OrderWithRelations[], now = new Date(), v
           action: "Check if warehouse scanned item"
         });
       }
+    }
+
+    if (viewMode === "admin" && !(order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt) && !reminderHidden(order, "commit_warehouse", now)) {
+      reminders.push({
+        id: `${order.id}:admin-commit-warehouse`,
+        type: "commit_warehouse",
+        label: "Urgent: commit member order to warehouse",
+        dueDate: order.createdAt,
+        order,
+        severity: severityFor(order.createdAt),
+        priority: "high",
+        action: "Commit member order to warehouse"
+      });
     }
 
     if (!order.amazonAccount && viewMode === "admin" && !reminderHidden(order, "missing_amazon_account", now)) {

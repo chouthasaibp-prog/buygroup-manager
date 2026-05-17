@@ -66,7 +66,7 @@ type OrderCardAlert = {
   priority: "high" | "warning" | "normal";
   label: string;
   detail?: string;
-  action?: "submitToWarehouse" | "open";
+  action?: "commitWarehouse" | "submitToWarehouse" | "open";
   reviewAction?: "reviewDeliveryBeforeTracking" | "reviewTrackingChange";
   reminderType?: Reminder["type"];
 };
@@ -91,7 +91,7 @@ type WorkspaceMemberItem = {
   email: string;
 };
 
-type StageFilter = OrderStage | "ALL" | "ADMIN_PAID_TO_MEMBER" | "ADMIN_DONE" | "MEMBER_TRACKING_SENT" | "MEMBER_AWAITING_PAYMENT" | "MEMBER_PAYMENT_SENT" | "MEMBER_PAYMENT_CONFIRMED" | "MEMBER_PAID" | "MEMBER_DONE";
+type StageFilter = OrderStage | "ALL" | "PERSONAL_COMMITTED" | "ADMIN_NEEDS_COMMIT" | "ADMIN_PAID_TO_MEMBER" | "ADMIN_DONE" | "MEMBER_TRACKING_SENT" | "MEMBER_AWAITING_PAYMENT" | "MEMBER_PAYMENT_SENT" | "MEMBER_PAYMENT_CONFIRMED" | "MEMBER_PAID" | "MEMBER_DONE";
 type WorkflowViewMode = "personal" | "member" | "admin";
 type WorkflowDateStep = {
   label: string;
@@ -109,7 +109,9 @@ type CalculationBreakdown = {
 
 const adminStages: Array<{ key: StageFilter; label: string; short: string }> = [
   { key: "ALL", label: "Active Orders", short: "Active Orders" },
-  { key: "ORDERED", label: "Waiting for Member Tracking", short: "Waiting for Member Tracking" },
+  { key: "ADMIN_NEEDS_COMMIT", label: "Needs Commit", short: "Needs Commit" },
+  { key: "ORDERED", label: "Waiting for Member Tracking / New Member Order", short: "New Member Order" },
+  { key: "PERSONAL_COMMITTED", label: "Committed to Warehouse", short: "Committed" },
   { key: "TRACKING_READY", label: "Tracking Received from Member", short: "Tracking Received from Member" },
   { key: "TRACKING_SUBMITTED", label: "Submitted to Warehouse", short: "Submitted to Warehouse" },
   { key: "DELIVERED", label: "Delivered by Member", short: "Delivered by Member" },
@@ -121,7 +123,8 @@ const adminStages: Array<{ key: StageFilter; label: string; short: string }> = [
 
 const personalStages: Array<{ key: StageFilter; label: string; short: string }> = [
   { key: "ALL", label: "Active Orders", short: "Active Orders" },
-  { key: "ORDERED", label: "Ordered", short: "Ordered" },
+  { key: "ORDERED", label: "Ordered / Needs Commit", short: "Ordered / Needs Commit" },
+  { key: "PERSONAL_COMMITTED", label: "Committed to Warehouse", short: "Committed" },
   { key: "TRACKING_SUBMITTED", label: "Tracking Submitted", short: "Tracking Submitted" },
   { key: "DELIVERED", label: "Delivered", short: "Delivered" },
   { key: "SCANNED", label: "Scanned", short: "Scanned" },
@@ -178,6 +181,7 @@ const operatorMemberNav = [
 ] as const;
 
 const actionLabels: Record<string, string> = {
+  commitWarehouse: "Mark Committed to Warehouse",
   submitTracking: "Submit To Warehouse",
   submitToWarehouse: "Submit To Warehouse",
   memberDelivered: "Mark Delivered",
@@ -570,7 +574,8 @@ function personalWorkflowLabel(order: OrderWithRelations) {
   if (order.scanned) return "Scanned";
   if (order.delivered) return "Delivered";
   if (order.trackingSubmitted || order.trackingNumber) return "Tracking Submitted";
-  return "Ordered";
+  if (order.committedToWarehouse || order.committedToWarehouseAt) return "Committed to Warehouse";
+  return "Ordered / Needs Commit";
 }
 
 function adminWorkflowLabel(order: OrderWithRelations) {
@@ -580,7 +585,8 @@ function adminWorkflowLabel(order: OrderWithRelations) {
   if (order.memberMarkedDelivered || order.delivered) return "Delivered by Member";
   if (order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) return "Submitted to Warehouse";
   if (order.memberSubmittedTrackingToAdmin || order.trackingNumber) return "Tracking Received from Member";
-  return "Waiting for Member Tracking";
+  if (order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt) return "Committed to Warehouse";
+  return "Waiting for Member Tracking / New Member Order";
 }
 
 function yesNo(value: boolean) {
@@ -609,7 +615,12 @@ function elapsedSince(date: Date | string) {
 
 function buildPersonalWorkflowSteps(order: OrderWithRelations): WorkflowDateStep[] {
   return [
-    { label: "Ordered", completed: true, date: order.createdAt },
+    { label: "Ordered / Needs Commit", completed: true, date: order.createdAt },
+    {
+      label: "Committed to Warehouse",
+      completed: order.committedToWarehouse || !!order.committedToWarehouseAt,
+      date: order.committedToWarehouseAt
+    },
     {
       label: "Tracking submitted",
       completed: order.trackingSubmitted || !!order.trackingNumber,
@@ -682,7 +693,12 @@ function buildMemberWorkflowSteps(order: OrderWithRelations): WorkflowDateStep[]
 
 function buildAdminWorkflowSteps(order: OrderWithRelations): WorkflowDateStep[] {
   return [
-    { label: "Waiting for Member Tracking", completed: true, date: order.createdAt },
+    { label: "New Member Order", completed: true, date: order.createdAt },
+    {
+      label: "Committed to Warehouse",
+      completed: order.adminCommittedToWarehouse || !!order.adminCommittedToWarehouseAt,
+      date: order.adminCommittedToWarehouseAt
+    },
     {
       label: "Tracking Received from Member",
       completed: order.memberSubmittedTrackingToAdmin || !!order.trackingNumber,
@@ -737,6 +753,7 @@ function actionButtonLabel(action: string, viewMode: WorkflowViewMode) {
 }
 
 function reminderLabel(reminder: Reminder) {
+  if (reminder.type === "commit_warehouse") return reminder.label;
   if (reminder.type === "missing_amazon_account") return "Amazon account missing";
   if (reminder.type === "missing_buy_group") return "Buy group / destination missing";
   if (reminder.type === "missing_info") return reminder.notes ?? "Missing order info";
@@ -805,7 +822,7 @@ function buildOrderCardAlerts(order: OrderWithRelations, viewMode: WorkflowViewM
       priority: reminder.priority ?? (reminder.severity === "overdue" ? "high" : "normal"),
       label: reminderLabel(reminder),
       detail: `Due ${shortDate(reminder.dueDate)}`,
-      action: reminder.type === "submit_tracking" && order.trackingNumber ? "submitToWarehouse" : "open",
+      action: reminder.type === "commit_warehouse" ? "commitWarehouse" : reminder.type === "submit_tracking" && order.trackingNumber ? "submitToWarehouse" : "open",
       reminderType: reminder.type
     });
   }
@@ -841,7 +858,8 @@ function matchesMemberStage(order: OrderWithRelations, selectedStage: StageFilte
 
 function matchesPersonalStage(order: OrderWithRelations, selectedStage: StageFilter) {
   if (selectedStage === "ALL") return !isPersonalDone(order);
-  if (selectedStage === "ORDERED") return !(order.trackingSubmitted || order.trackingNumber);
+  if (selectedStage === "ORDERED") return !(order.committedToWarehouse || order.committedToWarehouseAt) && !isPersonalDone(order);
+  if (selectedStage === "PERSONAL_COMMITTED") return (order.committedToWarehouse || order.committedToWarehouseAt) && !(order.trackingSubmitted || order.trackingNumber) && !isPersonalDone(order);
   if (selectedStage === "TRACKING_SUBMITTED") return (order.trackingSubmitted || !!order.trackingNumber) && !order.delivered;
   if (selectedStage === "DELIVERED") return order.delivered && !order.scanned;
   if (selectedStage === "SCANNED") return order.scanned && !order.paidOut;
@@ -853,7 +871,9 @@ function matchesPersonalStage(order: OrderWithRelations, selectedStage: StageFil
 
 function matchesAdminStage(order: OrderWithRelations, selectedStage: StageFilter) {
   if (selectedStage === "ALL") return !isAdminDone(order);
-  if (selectedStage === "ORDERED") return !order.trackingNumber;
+  if (selectedStage === "ADMIN_NEEDS_COMMIT") return !(order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt) && !isAdminDone(order);
+  if (selectedStage === "ORDERED") return (order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt) && !order.trackingNumber;
+  if (selectedStage === "PERSONAL_COMMITTED") return (order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt) && !order.trackingNumber && !isAdminDone(order);
   if (selectedStage === "TRACKING_READY") return !!order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted);
   if (selectedStage === "TRACKING_SUBMITTED") return (order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted) && !(order.memberMarkedDelivered || order.delivered);
   if (selectedStage === "DELIVERED") return (order.memberMarkedDelivered || order.delivered) && !(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned);
@@ -865,6 +885,7 @@ function matchesAdminStage(order: OrderWithRelations, selectedStage: StageFilter
 }
 
 function stageToneKey(stage: StageFilter): OrderStage {
+  if (stage === "PERSONAL_COMMITTED" || stage === "ADMIN_NEEDS_COMMIT") return "ORDERED";
   if (stage === "MEMBER_TRACKING_SENT") return "TRACKING_READY";
   if (stage === "MEMBER_AWAITING_PAYMENT") return "SCANNED";
   if (stage === "MEMBER_PAYMENT_SENT" || stage === "MEMBER_PAYMENT_CONFIRMED" || stage === "MEMBER_PAID" || stage === "MEMBER_DONE" || stage === "ADMIN_PAID_TO_MEMBER" || stage === "ADMIN_DONE") return "PROFIT_RECEIVED";
@@ -1446,6 +1467,17 @@ function ReminderAction({ reminder, buyGroups, viewMode }: { reminder: Reminder;
     );
   }
 
+  if (reminder.type === "commit_warehouse") {
+    return (
+      <form action={quickAction} className="mt-3 flex items-center gap-2">
+        <input type="hidden" name="id" value={reminder.order.id} />
+        <input type="hidden" name="workspaceId" value={reminder.order.workspaceId ?? ""} />
+        <input type="hidden" name="action" value="commitWarehouse" />
+        <button className="rounded-md border border-red-300/40 bg-red-500/15 px-2.5 py-1.5 text-xs font-medium text-red-100 hover:bg-red-500/25">Mark Committed to Warehouse</button>
+      </form>
+    );
+  }
+
   if (reminder.type === "submit_tracking" && !reminder.order.trackingNumber) return null;
   const action =
     reminder.type === "submit_tracking" ? "submitTracking" :
@@ -1666,6 +1698,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
   const memberOwed = order.memberPayoutAmount ?? payout.memberTotalPayout;
   const statusFields: Array<[string, string]> = viewMode === "personal" ? [
     ["Status", personalWorkflowLabel(order)],
+    ["Commit", order.committedToWarehouse || order.committedToWarehouseAt ? "Committed" : "Needs commit"],
     ["Card", order.creditCard?.name ?? "Not selected"],
     ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
     [cashbackLabelForOrder(order), money(financials.chaseCashback)],
@@ -1682,6 +1715,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Member email", order.submittedBy?.email ?? "Unknown"],
     ["Tracking", order.trackingNumber ?? "Missing"],
     ["Member tracking", order.memberSubmittedTrackingToAdmin || order.trackingNumber ? "Received from member" : "Waiting for member tracking"],
+    ["Commit", order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt ? "Committed" : "Needs commit"],
     ["Warehouse submission", order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted to warehouse" : "Not submitted to warehouse"],
     ["Member delivery", order.memberMarkedDelivered || order.delivered ? "Delivered by member" : "Not delivered by member"],
     ["Warehouse scan", order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned ? "Scanned by warehouse" : "Not scanned"],
@@ -1719,6 +1753,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       ["Qty", String(order.quantity)],
       ["Account", order.amazonAccount?.name ?? "Missing"],
       ...(viewMode !== "admin" ? [["Card", order.creditCard?.name ?? "Not selected"]] as Array<[string, string]> : []),
+      ["Commit", viewMode === "admin" ? order.adminCommittedToWarehouseAt ? shortDate(order.adminCommittedToWarehouseAt) : "Needs commit" : order.committedToWarehouseAt ? shortDate(order.committedToWarehouseAt) : "Needs commit"],
       ["Group", order.buyGroup?.name ?? "Missing"],
       ["Destination", order.buyGroup?.name ?? order.warehouse?.code ?? "Missing"],
       ["Order #", order.orderNumber ?? "Missing"],
@@ -1855,7 +1890,14 @@ function OrderCardAlerts({ order, alerts, onOpen, viewMode }: { order: OrderWith
             </span>
             <span className="min-w-0 flex-1 truncate font-medium">{alert.label}</span>
             {alert.detail && <span className="truncate text-muted">{alert.detail}</span>}
-            {alert.action === "submitToWarehouse" ? (
+            {alert.action === "commitWarehouse" ? (
+              <form action={quickAction}>
+                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                <input type="hidden" name="id" value={order.id} />
+                <input type="hidden" name="action" value="commitWarehouse" />
+                <button className="rounded-md border border-red-200/40 px-2 py-1 text-[11px] font-medium text-red-50 hover:bg-red-500/20">Mark Committed</button>
+              </form>
+            ) : alert.action === "submitToWarehouse" ? (
               <form action={quickAction}>
                 <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
                 <input type="hidden" name="id" value={order.id} />
@@ -1939,6 +1981,22 @@ function OrderCardAlerts({ order, alerts, onOpen, viewMode }: { order: OrderWith
 }
 
 function StageActions({ order, onOpen, isAdmin, viewMode }: { order: OrderWithRelations; onOpen: () => void; isAdmin: boolean; viewMode: WorkflowViewMode }) {
+  const needsPersonalCommit = viewMode === "personal" && !(order.committedToWarehouse || order.committedToWarehouseAt);
+  const needsAdminCommit = viewMode === "admin" && isAdmin && !(order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt);
+  if (needsPersonalCommit || needsAdminCommit) {
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <form action={quickAction}>
+          <input type="hidden" name="id" value={order.id} />
+          <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+          <input type="hidden" name="action" value="commitWarehouse" />
+          <button className="rounded-lg border border-red-300/45 bg-red-500/15 px-3 py-2 text-sm font-medium text-red-100 shadow-neon">Mark Committed to Warehouse</button>
+        </form>
+        <button onClick={onOpen} className="rounded-lg border border-line px-3 py-2 text-sm text-muted hover:text-white">Open</button>
+      </div>
+    );
+  }
+
   if (!isAdmin && !order.trackingNumber) {
     return <SubmitTrackingForm order={order} viewMode={viewMode} />;
   }
@@ -2053,6 +2111,7 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
   const payout = calculatePayoutBreakdown(order);
   const timeline = viewMode === "personal" ? [
     ["Ordered", order.createdAt],
+    ["Committed to warehouse", order.committedToWarehouseAt],
     ["Tracking submitted", order.trackingSubmittedAt ?? order.trackingAddedAt],
     ["Delivered", order.deliveredAt],
     ["Scanned", order.scannedAt],
@@ -2062,6 +2121,7 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
     ["Last Updated", order.updatedAt]
   ] : [
     ["Created", order.createdAt],
+    ...(isAdmin ? [["Committed to warehouse", order.adminCommittedToWarehouseAt] as [string, Date | string | null | undefined]] : []),
     ["Tracking sent to admin", order.memberSubmittedTrackingToAdminAt ?? order.trackingAddedAt],
     ...(isAdmin ? [["Submitted to warehouse", order.adminSubmittedTrackingToWarehouseAt ?? order.trackingSubmittedAt] as [string, Date | string | null | undefined]] : []),
     ["Delivered by member", order.memberMarkedDeliveredAt ?? order.deliveredAt],
@@ -2129,6 +2189,7 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
             {viewMode === "personal" ? (
               <>
                 <Fact label="Tracking submitted" value={yesNo(order.trackingSubmitted || !!order.trackingNumber)} />
+                <Fact label="Committed to warehouse" value={order.committedToWarehouseAt ? dateTime(order.committedToWarehouseAt) : yesNo(order.committedToWarehouse)} />
                 <Fact label="Delivered" value={yesNo(order.delivered)} />
                 <Fact label="Scanned" value={yesNo(order.scanned)} />
                 <Fact label="Payout from warehouse" value={yesNo(order.paidOut)} />
@@ -2138,6 +2199,7 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
             ) : (
               <>
                 <Fact label="Member tracking" value={order.memberSubmittedTrackingToAdmin || order.trackingNumber ? "Sent to admin" : "Ordered / tracking needed"} />
+                {isAdmin && <Fact label="Committed to warehouse" value={order.adminCommittedToWarehouseAt ? dateTime(order.adminCommittedToWarehouseAt) : yesNo(order.adminCommittedToWarehouse)} />}
                 {isAdmin && <Fact label="Warehouse submission" value={order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted ? "Submitted to warehouse" : "Not submitted to warehouse"} />}
                 <Fact label="Member delivered" value={yesNo(order.memberMarkedDelivered || order.delivered)} />
                 <Fact label="Warehouse scanned" value={yesNo(order.adminMarkedScannedByWarehouse || order.warehouseScanned || order.scanned)} />
@@ -2655,6 +2717,7 @@ function WarehousesView({ warehouses, orders }: { warehouses: Warehouse[]; order
 
 function OperatorQueues({ orders, setStage, setSection }: { orders: OrderWithRelations[]; setStage: (value: StageFilter) => void; setSection: (value: string) => void }) {
   const queues = [
+    ["Needs Commit", orders.filter((order) => !(order.adminCommittedToWarehouse || order.adminCommittedToWarehouseAt) && !isAdminDone(order))],
     ["Waiting for Member Tracking", orders.filter((order) => !order.trackingNumber)],
     ["Tracking Received from Member", orders.filter((order) => order.trackingNumber && !(order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted))],
     ["Submitted to Warehouse", orders.filter((order) => order.adminSubmittedTrackingToWarehouse || order.trackingSubmitted)],
@@ -2672,7 +2735,8 @@ function OperatorQueues({ orders, setStage, setSection }: { orders: OrderWithRel
         <button
           key={label}
           onClick={() => {
-            if (label.includes("Tracking Received")) setStage("TRACKING_READY");
+            if (label.includes("Needs Commit")) setStage("ADMIN_NEEDS_COMMIT");
+            else if (label.includes("Tracking Received")) setStage("TRACKING_READY");
             else if (label.includes("Submitted")) setStage("TRACKING_SUBMITTED");
             else if (label.includes("Done")) setStage("PROFIT_RECEIVED");
             else setStage("ALL");

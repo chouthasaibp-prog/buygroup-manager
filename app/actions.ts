@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { calculateFinancials, calculatePayoutBreakdown, deriveStage } from "@/lib/domain";
-import { sendImmediatePersonalWorkflowNotifications } from "@/lib/notifications";
+import { sendImmediateAdminCommitNotifications, sendImmediatePersonalWorkflowNotifications } from "@/lib/notifications";
 import { createWorkspaceForProfile, ensureProfile, requireWorkspaceActionContext } from "@/lib/workspace";
 import type { Order, OrderStage, PayoutMode, WorkspaceType } from "@prisma/client";
 
@@ -264,7 +264,12 @@ export async function createOrder(formData: FormData) {
       workspaceId,
       profileId: context.profile.id,
       orderId: order.id,
-      types: trackingNumber ? ["commit_warehouse", "check_delivery"] : ["commit_warehouse", "submit_tracking"]
+      types: ["commit_warehouse"]
+    });
+  } else if (!isOperatorAdmin) {
+    await sendImmediateAdminCommitNotifications({
+      workspaceId,
+      orderId: order.id
     });
   }
   revalidatePath("/");
@@ -603,8 +608,8 @@ export async function quickAction(formData: FormData) {
   const now = new Date();
   const data = {} as Record<string, unknown>;
 
-  const adminOnly = ["submitTracking", "submitToWarehouse", "confirmTrackingReceived", "scanned", "warehouseScanned", "warehousePaid", "paidOut", "cardPaid", "profitReceived", "snoozePayout", "memberPaid"];
-  const personalActions = ["submitTracking", "submitToWarehouse", "memberDelivered", "scanned", "warehouseScanned", "warehousePaid", "paidOut", "cardPaid", "profitReceived"];
+  const adminOnly = ["commitWarehouse", "submitTracking", "submitToWarehouse", "confirmTrackingReceived", "scanned", "warehouseScanned", "warehousePaid", "paidOut", "cardPaid", "profitReceived", "snoozePayout", "memberPaid"];
+  const personalActions = ["commitWarehouse", "submitTracking", "submitToWarehouse", "memberDelivered", "scanned", "warehouseScanned", "warehousePaid", "paidOut", "cardPaid", "profitReceived"];
   const memberOnly = ["memberDelivered", "memberConfirmPayment", "memberDone"];
   if (isPersonal && !personalActions.includes(action)) {
     throw new Error("You do not have permission for this action.");
@@ -617,6 +622,11 @@ export async function quickAction(formData: FormData) {
   }
 
   if (isPersonal) {
+    if (action === "commitWarehouse") {
+      data.committedToWarehouse = true;
+      data.committedToWarehouseAt = now;
+    }
+
     if ((action === "submitTracking" || action === "submitToWarehouse") && order.trackingNumber) {
       data.trackingSubmitted = true;
       data.trackingSubmittedAt = now;
@@ -646,6 +656,9 @@ export async function quickAction(formData: FormData) {
       data.profitReceived = true;
       data.profitReceivedAt = now;
     }
+  } else if (isOperatorAdmin && action === "commitWarehouse") {
+    data.adminCommittedToWarehouse = true;
+    data.adminCommittedToWarehouseAt = now;
   } else if ((action === "submitTracking" || action === "submitToWarehouse") && order.trackingNumber) {
     data.trackingSubmitted = true;
     data.trackingSubmittedAt = now;
@@ -742,6 +755,7 @@ export async function quickAction(formData: FormData) {
     await deriveStagePatch(workspaceId, id);
     if (isPersonal) {
       const immediateTypes = [
+        data.committedToWarehouse ? (order.trackingNumber ? "check_delivery" : "submit_tracking") : null,
         data.trackingSubmitted ? "check_delivery" : null,
         data.delivered ? "check_scan" : null,
         data.scanned ? "check_payout" : null,
