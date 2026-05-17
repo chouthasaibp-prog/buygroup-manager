@@ -1692,6 +1692,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
   const memberDisplayTotalProfit = memberDisplayMainProfit + financials.youngAdultProfit;
   const displayMainProfit = viewMode === "member" ? memberDisplayMainProfit : financials.mainProfit;
   const displayTotalProfit = viewMode === "member" ? memberDisplayTotalProfit : financials.profit;
+  const activeOwed = viewMode === "admin" ? financials.amountOwed : activeCreditOwed(order, viewMode);
   const displayStage = stage === "ALL" || !Object.prototype.hasOwnProperty.call(stageLabels, stage) ? order.currentStage : stage;
   const workflowSteps = buildWorkflowSteps(order, viewMode);
   const memberOwed = order.memberPayoutAmount ?? payout.memberTotalPayout;
@@ -1701,7 +1702,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Card", order.creditCard?.name ?? "Not selected"],
     ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
     [cashbackLabelForOrder(order), money(financials.chaseCashback)],
-    ["Net Credit Owed", money(financials.amountOwed)],
+    ["Net Credit Owed", money(activeOwed)],
     ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
     ["Tracking", order.trackingNumber ?? "Missing"],
     ["Delivered", order.delivered ? "Yes" : "No"],
@@ -1728,7 +1729,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Card", order.creditCard?.name ?? "Not selected"],
     ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
     [cashbackLabelForOrder(order), money(financials.chaseCashback)],
-    ["Net Credit Owed", money(financials.amountOwed)],
+    ["Net Credit Owed", money(activeOwed)],
     ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
     ["Tracking", order.trackingNumber ?? "Missing"],
     ["Delivered", order.memberMarkedDelivered || order.delivered ? "Yes" : "No"],
@@ -1737,9 +1738,9 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ["Payment", order.memberConfirmedPayment ? "Credit owed" : order.adminPaidMember || order.memberPaid ? "Sent" : "Open"]
   ];
   const moneyFields: Array<[string, string]> = viewMode === "personal" && stage === "PAID_OUT" ? [
-    ["Credit / Amount Owed", money(financials.amountOwed)]
+    [creditUnpaidForView(order, viewMode) ? "Credit / Amount Owed" : "Credit", creditUnpaidForView(order, viewMode) ? money(activeOwed) : "Paid"]
   ] : viewMode === "member" && stage === "MEMBER_PAYMENT_CONFIRMED" ? [
-    ["Credit / Amount Owed", money(financials.amountOwed)]
+    [creditUnpaidForView(order, viewMode) ? "Credit / Amount Owed" : "Credit", creditUnpaidForView(order, viewMode) ? money(activeOwed) : "Paid"]
   ] : viewMode === "admin" && stage === "PAID_OUT" ? [
     ["Member", memberName(order)],
     ["Warehouse payout", money(payout.warehouseTotalPayout)],
@@ -1760,7 +1761,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
       [viewMode === "admin" ? "Warehouse Payout" : "Member Payout", money(viewMode === "admin" ? payout.warehousePayoutPerUnit : payout.memberPayoutPerUnit)],
       ...(viewMode === "admin" ? [["Member Payout", money(payout.memberPayoutPerUnit)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
       [cashbackLabelForOrder(order), order.youngAdultBalanceUsed ? "0%" : `${order.chaseCashbackPercent}%`],
-      ...(viewMode !== "admin" ? [["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)], ["Net Credit Owed", money(financials.amountOwed)]] as Array<[string, string]> : []),
+      ...(viewMode !== "admin" ? [["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)], [creditUnpaidForView(order, viewMode) ? "Net Credit Owed" : "Credit", creditUnpaidForView(order, viewMode) ? money(activeOwed) : "Paid"]] as Array<[string, string]> : []),
       [mainProfitCashbackLabel(order), money(displayMainProfit)],
       ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
       ["Total Profit", money(displayTotalProfit)],
@@ -1795,7 +1796,7 @@ function OrderQueueCard({ order, alerts = [], stage, onOpen, isAdmin = false, vi
     ],
     PAID_OUT: [
       ["Paid Out from Warehouse", shortDate(order.paidOutAt)],
-      ["Amount Owed", money(financials.amountOwed)],
+      ["Amount Owed", money(activeOwed)],
       ["Unrealized Profit", money(displayTotalProfit)],
       ...(viewMode === "admin" ? [["Warehouse Payout", money(payout.warehouseTotalPayout)], ["Member Payout", money(payout.memberTotalPayout)], ["Spread", money(payout.adminTotalSpread)]] as Array<[string, string]> : []),
       ["Account", order.amazonAccount?.name ?? "Missing"],
@@ -2108,6 +2109,8 @@ function NewOrderModal({ accounts, creditCards, buyGroups, workspaceId, viewMode
 function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, workspaceName, memberStatus, isAdmin, viewMode, onClose }: { order: OrderWithRelations; accounts: AmazonAccount[]; creditCards: CreditCardModel[]; buyGroups: BuyGroup[]; workspaceId: string; workspaceName: string; memberStatus: string | null; isAdmin: boolean; viewMode: WorkflowViewMode; onClose: () => void }) {
   const financials = calculateFinancials(order);
   const payout = calculatePayoutBreakdown(order);
+  const activeAmountOwed = viewMode === "admin" ? financials.amountOwed : activeCreditOwed(order, viewMode);
+  const creditPaidOrDone = viewMode !== "admin" && !creditUnpaidForView(order, viewMode);
   const timeline = viewMode === "personal" ? [
     ["Ordered", order.createdAt],
     ["Committed to warehouse", order.committedToWarehouseAt],
@@ -2215,7 +2218,8 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
             {(viewMode === "personal" ? [
               ["Credit Card", order.creditCard ? cardLabel(order.creditCard) : "Not selected"],
               ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
-              ["Net Credit Owed", money(financials.amountOwed)],
+              ["Active Amount Owed", money(activeAmountOwed)],
+              ...(creditPaidOrDone ? [["Original Credit Owed", money(financials.amountOwed)]] as Array<[string, string]> : []),
               ["Total Paid", money(financials.totalPaid)],
               ["Payout", money(financials.totalPayout)],
               ["Payout Difference", money(financials.payoutDifference)],
@@ -2223,7 +2227,7 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
               [mainProfitCashbackLabel(order), money(financials.mainProfit)],
               ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
               ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
-              ["Amount Owed", money(financials.amountOwed)],
+              ["Amount Owed", money(activeAmountOwed)],
               ["Total Profit", money(financials.profit)],
               ["Profit Status", order.creditCardPaid ? "Realized" : "Unrealized"]
             ] : isAdmin ? [
@@ -2235,7 +2239,8 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
             ] : [
               ["Credit Card", order.creditCard ? cardLabel(order.creditCard) : "Not selected"],
               ["Gross Credit", money(order.youngAdultBalanceUsed ? 0 : financials.totalPaid)],
-              ["Net Credit Owed", money(financials.amountOwed)],
+              ["Active Amount Owed", money(activeAmountOwed)],
+              ...(creditPaidOrDone ? [["Original Credit Owed", money(financials.amountOwed)]] as Array<[string, string]> : []),
               ["Member payout", money(order.memberPayoutAmount ?? payout.memberTotalPayout)],
               ["Total Paid", money(financials.totalPaid)],
               ["Payout Difference", money((order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid)],
@@ -2243,7 +2248,7 @@ function OrderPanel({ order, accounts, creditCards, buyGroups, workspaceId, work
               [mainProfitCashbackLabel(order), money(order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + (order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid)],
               ["Young Adult Cashback Profit", money(financials.youngAdultProfit)],
               ["Paid with YA Balance", order.youngAdultBalanceUsed ? money(financials.youngAdultBalanceApplied) : "No"],
-              ["Credit / Amount Owed", money(financials.amountOwed)],
+              ["Credit / Amount Owed", money(activeAmountOwed)],
               ["Total Profit", money((order.youngAdultBalanceUsed ? 0 : financials.chaseCashback + (order.memberPayoutAmount ?? payout.memberTotalPayout) - financials.totalPaid) + financials.youngAdultProfit)],
               ["Payment status", order.memberConfirmedPayment ? "Payment confirmed / credit owed" : order.adminPaidMember || order.memberPaid ? "Payment sent" : "Open"]
             ]).map(([label, value]) => <Fact key={label} label={label} value={orderCalculationValue(order, label, value, viewMode)} />)}
@@ -2356,7 +2361,7 @@ function OrderFields({ accounts, creditCards, buyGroups, order, lockTracking = f
 }
 
 function creditStatus(order: OrderWithRelations, viewMode: WorkflowViewMode) {
-  if (viewMode === "personal") return order.creditCardPaid ? "Credit paid" : order.paidOut ? "Ready to pay card" : "Open";
+  if (viewMode === "personal") return order.creditCardPaid || order.creditCardPaidAt || isPersonalDone(order) ? "Credit paid" : order.paidOut ? "Ready to pay card" : "Waiting for payout";
   if (order.memberMarkedDone || order.profitReceived) return "Done";
   if (order.memberConfirmedPayment) return "Payment confirmed / credit owed";
   if (order.adminPaidMember || order.memberPaid) return "Payment sent";
@@ -2364,49 +2369,103 @@ function creditStatus(order: OrderWithRelations, viewMode: WorkflowViewMode) {
   return "Open";
 }
 
-function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations[]; viewMode: WorkflowViewMode }) {
-  const rows = orders
-    .filter((order) => viewMode === "personal"
-      ? !isPersonalDone(order) && order.paidOut && !order.creditCardPaid
-      : viewMode === "member"
-        ? order.memberConfirmedPayment && !(order.memberMarkedDone || order.profitReceived)
-        : !isAdminDone(order) && !(order.adminPaidMember || order.memberPaid)
-    )
-    .map((order) => ({ order, financials: calculateFinancials(order), payout: calculatePayoutBreakdown(order) }));
-  const totalOwed = rows.reduce((sum, item) => sum + (viewMode === "admin" ? item.order.memberPayoutAmount ?? item.payout.memberTotalPayout : item.financials.amountOwed), 0);
-  const totalLabel = viewMode === "member" ? "Credit Owed To Bank/Card" : viewMode === "personal" ? "Credit Owed" : "Member Payout Owed";
+function creditUnpaidForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "admin") return !isAdminDone(order) && !(order.adminPaidMember || order.memberPaid);
+  if (viewMode === "member") return !isMemberDone(order);
+  return !isPersonalDone(order) && !(order.creditCardPaid || order.creditCardPaidAt);
+}
 
-  return (
+function payoutReceivedForView(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (viewMode === "member") return order.memberConfirmedPayment;
+  return order.adminReceivedPayoutFromWarehouse || order.buyGroupPaidAdmin || order.paidOut || !!order.paidOutAt;
+}
+
+function activeCreditOwed(order: OrderWithRelations, viewMode: WorkflowViewMode) {
+  if (!creditUnpaidForView(order, viewMode)) return 0;
+  return calculateFinancials(order).amountOwed;
+}
+
+function CreditSummarySection({ orders, viewMode }: { orders: OrderWithRelations[]; viewMode: WorkflowViewMode }) {
+  if (viewMode === "admin") {
+    const rows = orders
+      .filter((order) => !isAdminDone(order) && !(order.adminPaidMember || order.memberPaid))
+      .map((order) => ({ order, financials: calculateFinancials(order), payout: calculatePayoutBreakdown(order) }));
+    const totalOwed = rows.reduce((sum, item) => sum + (item.order.memberPayoutAmount ?? item.payout.memberTotalPayout), 0);
+
+    return (
+      <section className="rounded-lg border border-slate-400/30 bg-panel/80 p-4 shadow-glow">
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-[.12em] text-muted">Member Payout Owed</div>
+            <div className="mt-1 text-3xl font-semibold text-white">
+              <CalculationLink value={money(totalOwed)} breakdown={aggregateBreakdown("Member Payout Owed", rows.map((row) => row.order), viewMode, money(totalOwed))} />
+            </div>
+          </div>
+          <div className="text-sm text-muted">{rows.length} open {rows.length === 1 ? "order" : "orders"}</div>
+        </div>
+      </section>
+    );
+  }
+
+  const bucketRows = orders
+    .filter((order) => creditUnpaidForView(order, viewMode) && calculateFinancials(order).amountOwed > 0)
+    .map((order) => ({ order, financials: calculateFinancials(order), payout: calculatePayoutBreakdown(order) }));
+  const waitingRows = bucketRows.filter(({ order }) => !payoutReceivedForView(order, viewMode));
+  const readyRows = bucketRows.filter(({ order }) => payoutReceivedForView(order, viewMode));
+  const totalOwed = bucketRows.reduce((sum, item) => sum + item.financials.amountOwed, 0);
+  const waitingTotal = waitingRows.reduce((sum, item) => sum + item.financials.amountOwed, 0);
+  const readyTotal = readyRows.reduce((sum, item) => sum + item.financials.amountOwed, 0);
+
+  const renderBucket = (title: string, rows: typeof bucketRows, total: number, ready = false) => (
     <section className="rounded-lg border border-slate-400/30 bg-panel/80 p-4 shadow-glow">
       <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
-          <div className="text-xs uppercase tracking-[.12em] text-muted">{totalLabel}</div>
+          <div className="text-xs uppercase tracking-[.12em] text-muted">{title}</div>
           <div className="mt-1 text-3xl font-semibold text-white">
-            <CalculationLink value={money(totalOwed)} breakdown={aggregateBreakdown(totalLabel, rows.map((row) => row.order), viewMode, money(totalOwed))} />
+            <CalculationLink value={money(total)} breakdown={aggregateBreakdown(title, rows.map((row) => row.order), viewMode, money(total))} />
           </div>
         </div>
-        <div className="text-sm text-muted">{rows.length} open {rows.length === 1 ? "order" : "orders"}</div>
+        <div className="text-sm text-muted">{rows.length} {rows.length === 1 ? "order" : "orders"}</div>
       </div>
       <div className="space-y-2">
-        {rows.slice(0, 12).map(({ order, financials, payout }) => (
-          <div key={order.id} className="grid gap-2 rounded-lg border border-line bg-surface/60 p-3 text-sm lg:grid-cols-[1.4fr_1fr_repeat(4,minmax(120px,.6fr))] lg:items-center">
+        {rows.slice(0, 12).map(({ order, financials }) => (
+          <div key={order.id} className="grid gap-2 rounded-lg border border-line bg-surface/60 p-3 text-sm xl:grid-cols-[1.3fr_repeat(7,minmax(105px,.7fr))_auto] xl:items-center">
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <span className="truncate font-medium text-white">{order.itemName}</span>
                 <YoungAdultBalanceBadge order={order} />
               </div>
-              {viewMode === "admin" && <div className="mt-0.5 truncate text-xs text-muted">{memberName(order)}</div>}
+              <div className="mt-0.5 truncate text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
             </div>
-            <div className="text-xs text-muted">{order.orderNumber ?? "No order #"}</div>
-            <Fact label="Total paid" value={orderCalculationValue(order, "Total paid", money(financials.totalPaid), viewMode)} />
-            <Fact label="Cashback" value={orderCalculationValue(order, "Cashback", money(financials.totalCashback), viewMode)} />
-            <Fact label={viewMode === "admin" ? "Member payout" : "Credit / owed"} value={orderCalculationValue(order, viewMode === "admin" ? "Member payout" : "Credit / owed", money(viewMode === "admin" ? order.memberPayoutAmount ?? payout.memberTotalPayout : financials.amountOwed), viewMode)} />
-            <Fact label="Status" value={creditStatus(order, viewMode)} />
+            <Fact label="Credit card" value={order.creditCard?.name ?? "Not selected"} />
+            <Fact label="Amazon" value={order.amazonAccount?.name ?? "Missing"} />
+            <Fact label="Buy group" value={order.buyGroup?.name ?? order.warehouse?.name ?? "Missing"} />
+            <Fact label="Retail total" value={orderCalculationValue(order, "Total paid", money(financials.totalPaid), viewMode)} />
+            <Fact label="Card cashback" value={orderCalculationValue(order, "Cashback", money(financials.chaseCashback), viewMode)} />
+            <Fact label="Net credit owed" value={orderCalculationValue(order, "Credit owed", money(financials.amountOwed), viewMode)} />
+            <Fact label="Payout" value={payoutReceivedForView(order, viewMode) ? "Received" : "Waiting"} />
+            <Fact label="Ordered" value={shortDate(order.createdAt)} />
+            {ready ? (
+              <form action={quickAction}>
+                <input type="hidden" name="id" value={order.id} />
+                <input type="hidden" name="workspaceId" value={order.workspaceId ?? ""} />
+                <input type="hidden" name="action" value={viewMode === "member" ? "memberDone" : "cardPaid"} />
+                <button className="rounded-md border border-green-300/40 bg-green-500/15 px-2.5 py-1.5 text-xs font-medium text-green-100 hover:bg-green-500/25">{viewMode === "member" ? "Mark Done" : "Mark Credit Paid"}</button>
+              </form>
+            ) : <div />}
           </div>
         ))}
-        {rows.length === 0 && <div className="rounded-lg border border-dashed border-line p-5 text-center text-sm text-muted">No open credit owed.</div>}
+        {rows.length === 0 && <div className="rounded-lg border border-dashed border-line p-5 text-center text-sm text-muted">No orders in this bucket.</div>}
       </div>
     </section>
+  );
+
+  return (
+    <div className="space-y-4">
+      {renderBucket("Total Credit Owed", bucketRows, totalOwed)}
+      {renderBucket("New Credit / Waiting to be Paid", waitingRows, waitingTotal)}
+      {renderBucket("Credit Ready to be Paid", readyRows, readyTotal, true)}
+    </div>
   );
 }
 
@@ -3370,14 +3429,14 @@ function summarize(orders: OrderWithRelations[], viewMode: WorkflowViewMode = "p
           if (order.memberConfirmedPayment) acc.amountOwed += financials.amountOwed;
         } else {
           if (!order.paidOut) acc.totalPayout += financials.totalPayout;
-          if (!order.creditCardPaid) acc.amountOwed += financials.amountOwed;
+          if (!(order.creditCardPaid || order.creditCardPaidAt)) acc.amountOwed += financials.amountOwed;
         }
       }
       if (isRealizedForView(order, viewMode)) acc.realizedProfit += orderProfitForView(order, viewMode);
       if (isUnrealizedForView(order, viewMode)) acc.unrealizedProfit += orderProfitForView(order, viewMode);
       if (!done && viewMode === "admin") {
         if (!(order.adminPaidMember || order.memberPaid)) acc.unpaidCard += order.memberPayoutAmount ?? payout.memberTotalPayout;
-      } else if (!done && (viewMode === "member" ? order.memberConfirmedPayment : order.paidOut)) {
+      } else if (!done && (viewMode === "member" ? order.memberConfirmedPayment : order.paidOut) && creditUnpaidForView(order, viewMode)) {
         acc.unpaidCard += financials.amountOwed;
       }
       if (!done && ((order.trackingNumber && !order.trackingSubmitted) || (order.delivered && !order.paidOut) || (order.paidOut && !order.creditCardPaid))) acc.needsAction += 1;
